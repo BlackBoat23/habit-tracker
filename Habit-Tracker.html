@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Doug's Tracker</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#EF0107" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Doug's Tracker" />
+<link rel="apple-touch-icon" href="icon.svg" />
+<script src="https://accounts.google.com/gsi/client" async onload="onGsiLoaded()"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #ffffff;
+    --bg-secondary: #f5f5f4;
+    --text: #1a1a1a;
+    --text-secondary: #6b7280;
+    --text-tertiary: #9ca3af;
+    --border: rgba(0,0,0,0.1);
+    --border-strong: rgba(0,0,0,0.18);
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --accent: #EF0107;
+    --accent-muted: rgba(239,1,7,0.08);
+    --cell-yes-bg: #dcfce7;
+    --cell-yes-text: #15803d;
+    --cell-no-bg: #fee2e2;
+    --cell-no-text: #b91c1c;
+    --today-bg: #fff5f5;
+    --today-border: #EF0107;
+    --cell-w: 60px;
+    --cell-h: 56px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1a;
+      --bg-secondary: #242424;
+      --text: #f2f2f7;
+      --text-secondary: #aeaeb2;
+      --text-tertiary: #636366;
+      --border: rgba(255,255,255,0.1);
+      --border-strong: rgba(255,255,255,0.2);
+      --accent: #EF0107;
+      --accent-muted: rgba(239,1,7,0.15);
+      --cell-yes-bg: #14532d;
+      --cell-yes-text: #4ade80;
+      --cell-no-bg: #450a0a;
+      --cell-no-text: #f87171;
+      --today-bg: #2d0a0a;
+      --today-border: #EF0107;
+    }
+  }
+
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  body::before { content: ''; display: block; height: 3px; background: linear-gradient(90deg, #EF0107 0%, #EF0107 60%, #ffffff 60%, #ffffff 70%, #EF0107 70%); position: fixed; top: 0; left: 0; right: 0; z-index: 999; }
+  .app { max-width: 700px; margin: 0 auto; padding: 2.25rem 1.25rem 2rem; }
+
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; }
+  .title { font-size: 22px; font-weight: 500; }
+  .header-actions { display: flex; gap: 8px; }
+  .hdr-btn { font-size: 12px; padding: 6px 12px; border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; transition: background 0.1s; }
+  .hdr-btn:hover { background: var(--border); color: var(--text); }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; border-bottom: 0.5px solid var(--border); margin-bottom: 1.5rem; }
+  .tab { font-size: 14px; font-weight: 500; padding: 8px 18px 12px; cursor: pointer; color: var(--text-secondary); border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; transition: color 0.15s; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  /* Navigation */
+  .nav-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; gap: 12px; }
+  .nav-btn { background: var(--bg-secondary); border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); padding: 7px 16px; font-size: 13px; cursor: pointer; color: var(--text); white-space: nowrap; transition: background 0.1s; }
+  .nav-btn:hover:not(:disabled) { background: var(--border); }
+  .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .nav-label { font-size: 14px; color: var(--text-secondary); font-weight: 500; text-align: center; flex: 1; }
+
+  /* Grid */
+  .grid-wrap { overflow-x: auto; border-radius: var(--radius-lg); border: 0.5px solid var(--border-strong); }
+  .grid { border-collapse: collapse; width: 100%; }
+  .grid th, .grid td { border: 0.5px solid var(--border); }
+
+  /* Date header cells */
+  .col-header { width: var(--cell-w); min-width: var(--cell-w); text-align: center; padding: 8px 4px; background: var(--bg-secondary); vertical-align: middle; }
+  .col-header.today-col { background: var(--today-bg); }
+  .day-name { display: block; font-size: 11px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; }
+  .day-num { display: block; font-size: 18px; font-weight: 500; color: var(--text); line-height: 1.2; margin: 2px 0; }
+  .day-month { display: block; font-size: 10px; color: var(--text-tertiary); }
+  .col-header.today-col .day-num { color: var(--today-border); }
+
+  /* Habit label column */
+  .habit-label-col { text-align: left; font-size: 13px; color: var(--text); padding: 0 16px; font-weight: 400; white-space: nowrap; height: var(--cell-h); min-width: 170px; max-width: 200px; background: var(--bg); position: sticky; left: 0; z-index: 2; }
+  .grid thead .habit-label-col { background: var(--bg-secondary); height: auto; padding: 8px 16px; }
+
+  /* Data cells */
+  .cell { width: var(--cell-w); height: var(--cell-h); cursor: pointer; user-select: none; transition: filter 0.1s; text-align: center; vertical-align: middle; position: relative; }
+  .cell:hover { filter: brightness(0.92); }
+  .cell.unset { background: var(--bg); }
+  .cell.yes { background: var(--cell-yes-bg); }
+  .cell.no { background: var(--cell-no-bg); }
+  .cell.today-col { box-shadow: inset 0 0 0 2px var(--today-border); }
+  .cell-icon { font-size: 18px; font-weight: 700; line-height: var(--cell-h); }
+  .cell.yes .cell-icon { color: var(--cell-yes-text); }
+  .cell.no .cell-icon { color: var(--cell-no-text); }
+  .cell.unset .cell-icon { color: transparent; }
+
+  /* Exercise duration cells */
+  .dur { background: var(--cell-yes-bg); }
+  .dur .cell-icon { color: var(--cell-yes-text); font-size: 12px; }
+
+  /* No Booze count cells */
+  .cnt-0  { background: #dcfce7; } .cnt-0  .cell-icon { color: #15803d; }
+  .cnt-1  { background: #ecfccb; } .cnt-1  .cell-icon { color: #3f6212; }
+  .cnt-2  { background: #fef9c3; } .cnt-2  .cell-icon { color: #854d0e; }
+  .cnt-3  { background: #fed7aa; } .cnt-3  .cell-icon { color: #9a3412; }
+  .cnt-4  { background: #fdba74; } .cnt-4  .cell-icon { color: #c2410c; }
+  .cnt-5p { background: #fee2e2; } .cnt-5p .cell-icon { color: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    .cnt-0  { background: #14532d; } .cnt-0  .cell-icon { color: #4ade80; }
+    .cnt-1  { background: #1a3a0a; } .cnt-1  .cell-icon { color: #a3e635; }
+    .cnt-2  { background: #3b2500; } .cnt-2  .cell-icon { color: #fcd34d; }
+    .cnt-3  { background: #431407; } .cnt-3  .cell-icon { color: #fb923c; }
+    .cnt-4  { background: #431407; } .cnt-4  .cell-icon { color: #f97316; }
+    .cnt-5p { background: #450a0a; } .cnt-5p .cell-icon { color: #f87171; }
+  }
+
+  /* Legend */
+  .legend { display: flex; gap: 16px; margin-top: 1rem; justify-content: flex-end; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .legend-dot { width: 14px; height: 14px; border-radius: 3px; }
+  .legend-dot.yes { background: var(--cell-yes-bg); border: 1px solid var(--cell-yes-text); }
+  .legend-dot.no { background: var(--cell-no-bg); border: 1px solid var(--cell-no-text); }
+  .legend-dot.unset { background: var(--bg-secondary); border: 1px solid var(--border-strong); }
+
+  /* Running tab */
+  .run-table { width: 100%; border-collapse: collapse; }
+  .run-th { font-size: 11px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 16px; text-align: left; background: var(--bg-secondary); border-bottom: 0.5px solid var(--border-strong); }
+  .run-date-cell { padding: 12px 16px; border-bottom: 0.5px solid var(--border); min-width: 120px; vertical-align: middle; }
+  .run-day-name { display: block; font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; }
+  .run-day-date { display: block; font-size: 14px; font-weight: 500; color: var(--text); }
+  .run-dist-cell { padding: 12px 16px; border-bottom: 0.5px solid var(--border); cursor: pointer; min-width: 150px; vertical-align: middle; }
+  .run-dist-cell:hover:not(.editing) { background: var(--bg-secondary); }
+  .run-dist-val { font-size: 15px; font-weight: 500; color: var(--text); }
+  .run-dist-unit { font-size: 12px; color: var(--text-secondary); margin-left: 3px; }
+  .run-dist-empty { font-size: 14px; color: var(--text-tertiary); }
+  .run-dist-cell.editing { background: var(--bg-secondary); cursor: default; }
+  .run-dist-input { font-size: 15px; padding: 4px 8px; border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); width: 90px; outline: none; }
+  .run-type-cell { padding: 12px 16px; border-bottom: 0.5px solid var(--border); cursor: pointer; font-size: 13px; font-weight: 500; min-width: 120px; text-align: center; color: var(--text-tertiary); transition: filter 0.1s; vertical-align: middle; }
+  .run-type-cell:hover { filter: brightness(0.93); }
+  .run-type-outside   { background: #e0f2fe; color: #0369a1; }
+  .run-type-treadmill { background: #f3e8ff; color: #7c3aed; }
+  tr.today-run-row .run-date-cell { background: var(--today-bg); }
+  @media (prefers-color-scheme: dark) {
+    .run-type-outside   { background: #0c4a6e; color: #7dd3fc; }
+    .run-type-treadmill { background: #2e1065; color: #c4b5fd; }
+    tr.today-run-row .run-date-cell { background: var(--today-bg); }
+  }
+
+  /* -- Dashboard ---------------------------------------- */
+  .dash-header { margin-bottom: 1.5rem; }
+  .dash-title-text { font-size: 22px; font-weight: 500; }
+  .dash-date-text  { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+  .dash-summary { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 500px) { .dash-summary { grid-template-columns: repeat(2,1fr); } }
+  .dash-stat { background: var(--bg-secondary); border-radius: var(--radius-md); padding: 12px 14px; }
+  .dash-stat-val  { font-size: 20px; font-weight: 500; line-height: 1.1; }
+  .dash-stat-label{ font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 500px) { .dash-grid { grid-template-columns: 1fr; } }
+  .dash-card { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .dash-card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 14px; }
+  .dash-sub { font-size: 11px; font-weight: 400; color: var(--text-tertiary); margin-left: 5px; }
+  .dash-empty { font-size: 13px; color: var(--text-tertiary); }
+
+  .dash-habit-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .dash-h-name { font-size: 12px; color: var(--text-secondary); width: 120px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dash-bar-track { flex: 1; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 0.5px solid var(--border); }
+  .dash-bar-fill  { height: 100%; border-radius: 4px; transition: width 0.4s; }
+  .dash-pct { font-size: 11px; color: var(--text-secondary); width: 30px; text-align: right; flex-shrink: 0; }
+
+  .dash-ex-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .dash-ex-name { font-size: 13px; font-weight: 500; color: var(--text); display: block; margin-bottom: 2px; }
+  .dash-ex-stat { font-size: 12px; color: var(--text-secondary); }
+  .dash-ex-dots { display: flex; gap: 3px; margin-top: 4px; }
+  .dash-ex-dot { width: 11px; height: 11px; border-radius: 3px; background: var(--bg); border: 0.5px solid var(--border-strong); }
+  .dash-ex-dot.on { background: var(--cell-yes-bg); border-color: var(--cell-yes-text); }
+
+  .dash-run-stats { display: flex; gap: 20px; margin-bottom: 14px; }
+  .dash-run-stat-item { display: flex; flex-direction: column; }
+  .dash-big-num { font-size: 20px; font-weight: 500; color: var(--text); line-height: 1.1; }
+  .dash-num-unit { font-size: 11px; color: var(--text-secondary); }
+  .dash-run-chart { display: flex; align-items: flex-end; gap: 4px; height: 94px; margin-bottom: 10px; }
+  .dash-run-col   { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .dash-run-lbl   { font-size: 9px; color: var(--text-tertiary); line-height: 1; min-height: 11px; }
+  .dash-run-bar   { width: 100%; border-radius: 3px 3px 0 0; }
+  .dash-run-day   { font-size: 10px; color: var(--text-tertiary); }
+  .dash-split-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); margin-bottom: 5px; }
+  .dash-split-labels { display: flex; justify-content: space-between; font-size: 11px; }
+
+  /* -- Google Drive modal ------------------------------- */
+  .modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+  .modal-box { position: relative; background: var(--bg); border-radius: var(--radius-lg); padding: 24px; max-width: 440px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+  .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  .modal-note { font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 14px; padding: 10px 12px; background: var(--bg-secondary); border-radius: var(--radius-md); }
+  .modal-note a { color: #1a73e8; }
+  .modal-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin: 12px 0 4px; }
+  .modal-label span { font-weight: 400; color: var(--text-tertiary); }
+  .modal-input { width: 100%; padding: 8px 10px; font-size: 13px; border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); outline: none; font-family: monospace; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+  .modal-btn-primary { padding: 8px 20px; font-size: 13px; border-radius: var(--radius-md); border: none; background: #1a73e8; color: #fff; cursor: pointer; }
+  .modal-btn-secondary { padding: 8px 16px; font-size: 13px; border-radius: var(--radius-md); border: 0.5px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; }
+  .drive-status { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); margin-right: 5px; vertical-align: middle; }
+  .drive-status.connected { background: #22c55e; }
+
+  /* -- Toast -------------------------------------------- */
+  #toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(16px); padding: 9px 20px; border-radius: 20px; font-size: 13px; font-weight: 500; color: #fff; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 300; white-space: nowrap; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <span class="title">Doug's Tracker</span>
+    <div class="header-actions">
+      <button class="hdr-btn" onclick="saveToDrive()" title="Save to Google Drive">&#x2191; Drive</button>
+      <button class="hdr-btn" onclick="loadFromDrive()" title="Load from Google Drive">&#x2193; Drive</button>
+      <span style="width:0.5px;background:var(--border-strong);align-self:stretch;margin:2px 2px"></span>
+      <button class="hdr-btn" onclick="openDriveModal()" title="Google Drive settings"><span id="drive-dot" class="drive-status"></span>Drive</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('dashy')">Dashy-Bees</button>
+    <button class="tab" onclick="switchTab('daily')">Daily Habits</button>
+    <button class="tab" onclick="switchTab('exercise')">Exercise</button>
+    <button class="tab" onclick="switchTab('running')">Running</button>
+  </div>
+
+  <div id="view-content"></div>
+</div>
+
+<!-- Google Drive settings modal -->
+<div id="drive-modal" class="modal-overlay">
+  <div class="modal-backdrop" onclick="closeDriveModal()"></div>
+  <div class="modal-box">
+    <div class="modal-title">Google Drive Settings</div>
+    <div class="modal-note">
+      Requires a Google Cloud project with the Drive API enabled and an OAuth 2.0 Client ID (Web application type).<br><br>
+      Add your page's origin (e.g. <code>http://localhost:8080</code>) as an <strong>Authorised JavaScript origin</strong>. The page must be served over HTTP/HTTPS � it will not work from <code>file://</code>.<br><br>
+      The folder ID is the last segment of the Drive folder URL.
+    </div>
+    <label class="modal-label">OAuth 2.0 Client ID</label>
+    <input id="drive-client-id-inp" class="modal-input" placeholder="xxxx.apps.googleusercontent.com" />
+    <label class="modal-label">Drive Folder ID <span>(optional � saves to My Drive root if blank)</span></label>
+    <input id="drive-folder-id-inp" class="modal-input" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs" />
+    <div class="modal-actions">
+      <button class="modal-btn-secondary" onclick="closeDriveModal()">Cancel</button>
+      <button class="modal-btn-primary" onclick="saveDriveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<script>
+const MONTHS   = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAY_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+const HABITS = {
+  daily: [
+    { id: 'stretching', name: 'Stretching' },
+    { id: 'water',      name: 'Drinking 2L of Water' },
+    { id: 'exercise',   name: 'Exercise' },
+    { id: 'messages',   name: 'Messages' },
+    { id: 'fruitveg',   name: 'Fruit & Veg' },
+    { id: 'protein',    name: 'Protein' },
+    { id: 'nobooze',    name: 'No Booze', type: 'count' }
+  ],
+  exercise: [
+    { id: 'tennis',       name: 'Tennis',        type: 'duration' },
+    { id: 'basketball',   name: 'Basketball',    type: 'duration' },
+    { id: 'tabletennis',  name: 'Table Tennis',  type: 'duration' },
+    { id: 'hike',         name: 'Hike',          type: 'duration' }
+  ]
+};
+
+const DURATION_CYCLE = ['30', '60', '90', '120', '150', '180'];
+const COUNT_CYCLE = ['0', '1', '2', '3', '4', '5+'];
+const COUNT_CLASS = { '0': 'cnt-0', '1': 'cnt-1', '2': 'cnt-2', '3': 'cnt-3', '4': 'cnt-4', '5+': 'cnt-5p' };
+
+const YEAR       = 2026;
+const YEAR_START = new Date(YEAR, 0, 1);   // Jan 1
+const YEAR_END   = new Date(YEAR, 11, 31); // Dec 31
+
+let appState       = { completions: {}, running: {} };
+let activeTab      = 'dashy';
+let editingRunDate = null;
+let winStart   = defaultWindowStart();
+
+/* -- helpers ------------------------------------------- */
+
+function dk(d) { return d.toISOString().slice(0, 10); }
+
+function defaultWindowStart() {
+  const t = new Date();
+  const base = (t.getFullYear() === YEAR) ? new Date(t) : new Date(YEAR_START);
+  // Snap to Monday of that week
+  const dow = base.getDay();
+  base.setDate(base.getDate() - (dow === 0 ? 6 : dow - 1));
+  return clamp(base);
+}
+
+function clamp(d) {
+  const s = new Date(d);
+  if (s < YEAR_START) return new Date(YEAR_START);
+  const maxStart = new Date(YEAR_END);
+  maxStart.setDate(maxStart.getDate() - 6);
+  if (s > maxStart) return maxStart;
+  return s;
+}
+
+function windowDates() {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(winStart);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+}
+
+/* -- persistence --------------------------------------- */
+
+function load() {
+  try {
+    const raw = localStorage.getItem('habit-tracker-v3');
+    if (raw) appState = JSON.parse(raw);
+    if (!appState.running) appState.running = {};
+  } catch(e) {}
+  render();
+}
+
+function save() {
+  try { localStorage.setItem('habit-tracker-v3', JSON.stringify(appState)); } catch(e) {}
+}
+
+/* -- actions ------------------------------------------- */
+
+function findHabit(id) {
+  for (const tab of Object.values(HABITS)) {
+    const h = tab.find(h => h.id === id);
+    if (h) return h;
+  }
+  return null;
+}
+
+function toggleCell(habitId, dateKey) {
+  if (!appState.completions[dateKey]) appState.completions[dateKey] = {};
+  const cur   = appState.completions[dateKey][habitId];
+  const habit = findHabit(habitId);
+  if (habit && habit.type === 'duration') {
+    const idx = DURATION_CYCLE.indexOf(cur);
+    if (idx < DURATION_CYCLE.length - 1) appState.completions[dateKey][habitId] = DURATION_CYCLE[idx + 1];
+    else                                  delete appState.completions[dateKey][habitId];
+  } else if (habit && habit.type === 'count') {
+    const idx = COUNT_CYCLE.indexOf(cur);
+    if (idx < COUNT_CYCLE.length - 1) appState.completions[dateKey][habitId] = COUNT_CYCLE[idx + 1];
+    else                               delete appState.completions[dateKey][habitId];
+  } else {
+    if (!cur)               appState.completions[dateKey][habitId] = 'yes';
+    else if (cur === 'yes') appState.completions[dateKey][habitId] = 'no';
+    else                    delete appState.completions[dateKey][habitId];
+  }
+  save(); render();
+}
+
+function navigate(dir) {
+  const d = new Date(winStart);
+  d.setDate(d.getDate() + dir * 7);
+  winStart = clamp(d);
+  render();
+}
+
+function switchTab(t) { activeTab = t; render(); }
+
+function exportData() {
+  const filename = `habits-${dk(new Date())}.json`;
+  const blob = new Blob([JSON.stringify(appState, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importData(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      if (!parsed.completions) throw new Error('Invalid format');
+      appState = parsed;
+      save();
+      render();
+    } catch(err) {
+      alert('Import failed: file does not appear to be a valid habit tracker export.');
+    }
+    e.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+/* -- dashboard ----------------------------------------- */
+
+function renderDashboard() {
+  const today  = new Date();
+  const todayDk = dk(today);
+  const last7  = Array.from({length: 7}, (_, i) => {
+    const d = new Date(today); d.setDate(d.getDate() - (6 - i)); return d;
+  });
+
+  /* -- summary stats -- */
+  const todayComp   = appState.completions[todayDk] || {};
+  const todayHabits = HABITS.daily.filter(h => !h.type);
+  const todayDone   = todayHabits.filter(h => todayComp[h.id] === 'yes').length;
+
+  const runLast7    = last7.reduce((s, d) => s + (parseFloat((appState.running||{})[dk(d)]?.distance)||0), 0);
+
+  const exSessions  = last7.reduce((s, d) => {
+    const c = appState.completions[dk(d)] || {};
+    return s + HABITS.exercise.filter(h => c[h.id]).length;
+  }, 0);
+
+  const allStreaks = HABITS.daily.map(h => {
+    let streak = 0, d = new Date(today);
+    while (true) {
+      const v = (appState.completions[dk(d)] || {})[h.id];
+      if (v === 'yes') { streak++; d.setDate(d.getDate() - 1); } else break;
+    }
+    return streak;
+  });
+  const bestStreak = Math.max(0, ...allStreaks);
+
+  /* -- year-to-date running -- */
+  const RUN_GOAL = 500;
+  const yearRunKm = Object.entries(appState.running || {}).reduce((s, [date, e]) => {
+    return date.startsWith(`${YEAR}-`) ? s + (parseFloat(e.distance) || 0) : s;
+  }, 0);
+  const yearRunPct    = Math.min(100, Math.round(yearRunKm / RUN_GOAL * 100));
+  const yearRunRemain = Math.max(0, RUN_GOAL - yearRunKm).toFixed(1);
+
+  /* -- year-to-date exercise by activity -- */
+  const yearExMins = {};
+  HABITS.exercise.forEach(h => { yearExMins[h.id] = 0; });
+  Object.entries(appState.completions).forEach(([date, day]) => {
+    if (!date.startsWith(`${YEAR}-`)) return;
+    HABITS.exercise.forEach(h => { if (day[h.id]) yearExMins[h.id] += parseInt(day[h.id]) || 0; });
+  });
+  const yearExTotalMins = Object.values(yearExMins).reduce((s, v) => s + v, 0);
+  const yearExTotalHrs  = (yearExTotalMins / 60).toFixed(1);
+  const maxActivityMins = Math.max(...Object.values(yearExMins), 1);
+
+  const yearExRows = HABITS.exercise.map(h => {
+    const mins = yearExMins[h.id];
+    const hrs  = (mins / 60).toFixed(1);
+    const pct  = Math.round(mins / maxActivityMins * 100);
+    return `<div class="dash-habit-row">
+      <span class="dash-h-name">${h.name}</span>
+      <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%;background:#22c55e"></div></div>
+      <span class="dash-pct" style="width:36px">${hrs}h</span>
+    </div>`;
+  }).join('');
+
+  const summaryHtml = `<div class="dash-summary">
+    <div class="dash-stat"><div class="dash-stat-val">${todayDone}/${todayHabits.length}</div><div class="dash-stat-label">Habits today</div></div>
+    <div class="dash-stat"><div class="dash-stat-val">${bestStreak}</div><div class="dash-stat-label">Best streak</div></div>
+    <div class="dash-stat"><div class="dash-stat-val">${runLast7.toFixed(1)}<span style="font-size:13px;font-weight:400"> km</span></div><div class="dash-stat-label">Running this week</div></div>
+    <div class="dash-stat"><div class="dash-stat-val">${exSessions}</div><div class="dash-stat-label">Exercise sessions</div></div>
+  </div>`;
+
+  /* -- daily habits bars -- */
+  const yesNoHabits = HABITS.daily.filter(h => !h.type);
+  const habitBars = yesNoHabits.map(h => {
+    const yes = last7.filter(d => (appState.completions[dk(d)]||{})[h.id] === 'yes').length;
+    const pct = Math.round(yes / 7 * 100);
+    return `<div class="dash-habit-row">
+      <span class="dash-h-name">${h.name}</span>
+      <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%;background:#22c55e"></div></div>
+      <span class="dash-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+
+  /* -- no booze bars -- */
+  const bkeys  = ['0','1','2','3','4','5+'];
+  const bcBg   = {'0':'#dcfce7','1':'#ecfccb','2':'#fef9c3','3':'#fed7aa','4':'#fdba74','5+':'#fee2e2'};
+  const bcText = {'0':'#15803d','1':'#3f6212','2':'#854d0e','3':'#9a3412','4':'#c2410c','5+':'#b91c1c'};
+  const bcLabels = {'0':'None','1':'1 drink','2':'2 drinks','3':'3 drinks','4':'4 drinks','5+':'5+ drinks'};
+  const bcounts = Object.fromEntries(bkeys.map(k => [k, 0]));
+  last7.forEach(d => { const v = (appState.completions[dk(d)]||{}).nobooze; if (v && bcounts[v] !== undefined) bcounts[v]++; });
+  const boozeRows = bkeys.map(k => {
+    const pct = Math.round(bcounts[k] / 7 * 100);
+    return `<div class="dash-habit-row">
+      <span class="dash-h-name" style="color:${bcText[k]}">${bcLabels[k]}</span>
+      <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%;background:${bcBg[k]};border-right:1.5px solid ${bcText[k]}"></div></div>
+      <span class="dash-pct">${bcounts[k]}d</span>
+    </div>`;
+  }).join('');
+
+  /* -- exercise rows -- */
+  const exRows = HABITS.exercise.map(h => {
+    const entries = last7.map(d => (appState.completions[dk(d)]||{})[h.id]).filter(Boolean);
+    const totalMin = entries.reduce((s, v) => s + parseInt(v), 0);
+    const dots = last7.map(d => {
+      const v = (appState.completions[dk(d)]||{})[h.id];
+      return `<div class="dash-ex-dot${v ? ' on' : ''}"></div>`;
+    }).join('');
+    return `<div class="dash-ex-row">
+      <div>
+        <span class="dash-ex-name">${h.name}</span>
+        <span class="dash-ex-stat">${entries.length} sessions &middot; ${totalMin} min</span>
+        <div class="dash-ex-dots">${dots}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  /* -- running chart -- */
+  const runEntries = last7.map(d => {
+    const e = (appState.running||{})[dk(d)] || {};
+    return { d, dist: parseFloat(e.distance)||0, type: e.type||'' };
+  });
+  const totalKm  = runEntries.reduce((s, r) => s + r.dist, 0);
+  const outKm    = runEntries.filter(r => r.type==='outside').reduce((s,r) => s+r.dist, 0);
+  const treadKm  = runEntries.filter(r => r.type==='treadmill').reduce((s,r) => s+r.dist, 0);
+  const maxDist  = Math.max(...runEntries.map(r => r.dist), 0.1);
+  const outPct   = totalKm > 0 ? Math.round(outKm / totalKm * 100) : 0;
+  const treadPct = totalKm > 0 ? 100 - outPct : 0;
+
+  const runBars = runEntries.map(r => {
+    const barH = r.dist > 0 ? Math.max(6, Math.round(r.dist / maxDist * 62)) : 0;
+    const color = r.type==='outside' ? '#0369a1' : r.type==='treadmill' ? '#7c3aed' : '#cbd5e1';
+    return `<div class="dash-run-col">
+      <span class="dash-run-lbl">${r.dist > 0 ? r.dist : ''}</span>
+      <div class="dash-run-bar" style="height:${barH}px;background:${barH ? color : 'transparent'}"></div>
+      <span class="dash-run-day">${DAY_ABBR[r.d.getDay()]}</span>
+    </div>`;
+  }).join('');
+
+  const splitBar = totalKm > 0 ? `
+    <div class="dash-split-bar">
+      <div style="width:${outPct}%;background:#0369a1"></div>
+      <div style="width:${treadPct}%;background:#7c3aed"></div>
+    </div>
+    <div class="dash-split-labels">
+      <span style="color:#0369a1">Outside ${outPct}%</span>
+      <span style="color:#7c3aed">Treadmill ${treadPct}%</span>
+    </div>` : '<span class="dash-empty">No runs logged yet</span>';
+
+  return `
+    <div class="dash-header">
+      <div class="dash-title-text">Dashy-Bees</div>
+      <div class="dash-date-text">${today.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'})}</div>
+    </div>
+    ${summaryHtml}
+    <div class="dash-grid">
+      <div class="dash-card">
+        <div class="dash-card-title">Daily Habits <span class="dash-sub">last 7 days</span></div>
+        ${habitBars || '<span class="dash-empty">No data yet</span>'}
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-title">No Booze <span class="dash-sub">last 7 days</span></div>
+        ${boozeRows}
+      </div>
+      <div class="dash-card" style="grid-column:1/-1">
+        <div class="dash-card-title">Running Goal <span class="dash-sub">year to date</span></div>
+        <div style="display:flex;align-items:baseline;gap:20px;margin-bottom:10px;flex-wrap:wrap">
+          <div><span class="dash-big-num">${yearRunKm.toFixed(1)}</span><span class="dash-num-unit"> km</span></div>
+          <div><span class="dash-big-num" style="font-size:16px;color:#0369a1">${yearRunPct}%</span><span class="dash-num-unit"> of ${RUN_GOAL} km goal</span></div>
+          <div style="flex:1"></div>
+          <span style="font-size:12px;color:var(--text-tertiary)">${yearRunRemain} km remaining</span>
+        </div>
+        <div class="dash-bar-track" style="height:10px">
+          <div class="dash-bar-fill" style="width:${yearRunPct}%;background:#0369a1;border-radius:5px"></div>
+        </div>
+      </div>
+      <div class="dash-card" style="grid-column:1/-1">
+        <div class="dash-card-title">Exercise Hours <span class="dash-sub">year to date &middot; ${yearExTotalHrs} hrs total</span></div>
+        ${yearExRows || '<span class="dash-empty">No data yet</span>'}
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-title">Running <span class="dash-sub">last 7 days</span></div>
+        <div class="dash-run-stats">
+          <div class="dash-run-stat-item"><span class="dash-big-num">${totalKm.toFixed(1)}</span><span class="dash-num-unit">km total</span></div>
+          <div class="dash-run-stat-item"><span class="dash-big-num" style="color:#0369a1">${outKm.toFixed(1)}</span><span class="dash-num-unit">outside</span></div>
+          <div class="dash-run-stat-item"><span class="dash-big-num" style="color:#7c3aed">${treadKm.toFixed(1)}</span><span class="dash-num-unit">treadmill</span></div>
+        </div>
+        <div class="dash-run-chart">${runBars}</div>
+        ${splitBar}
+      </div>
+    </div>`;
+}
+
+/* -- running tab --------------------------------------- */
+
+function renderRunning(dates, todayDk) {
+  const running = appState.running || {};
+  let rows = '';
+  dates.forEach(d => {
+    const key     = dk(d);
+    const entry   = running[key] || {};
+    const isToday = key === todayDk;
+    const editing = editingRunDate === key;
+
+    const distCell = editing
+      ? `<td class="run-dist-cell editing">
+           <input class="run-dist-input" id="run-dist-${key}"
+                  value="${(entry.distance || '').replace(/"/g, '&quot;')}"
+                  placeholder="0.0"
+                  onblur="saveRunDist('${key}')"
+                  onkeydown="if(event.key==='Enter')saveRunDist('${key}');else if(event.key==='Escape'){editingRunDate=null;render();}" />
+           <span class="run-dist-unit">km</span>
+         </td>`
+      : `<td class="run-dist-cell" onclick="startEditDist('${key}')">
+           ${entry.distance
+             ? `<span class="run-dist-val">${entry.distance}</span><span class="run-dist-unit"> km</span>`
+             : `<span class="run-dist-empty">&#x2014;</span>`}
+         </td>`;
+
+    const type      = entry.type || '';
+    const typeCls   = type === 'outside' ? 'run-type-outside' : type === 'treadmill' ? 'run-type-treadmill' : '';
+    const typeLabel = type === 'outside' ? 'Outside' : type === 'treadmill' ? 'Treadmill' : '&#x2014;';
+
+    rows += `<tr${isToday ? ' class="today-run-row"' : ''}>
+      <td class="run-date-cell">
+        <span class="run-day-name">${DAY_ABBR[d.getDay()]}</span>
+        <span class="run-day-date">${d.getDate()} ${MONTHS[d.getMonth()]}</span>
+      </td>
+      ${distCell}
+      <td class="run-type-cell ${typeCls}" onclick="toggleRunType('${key}')">${typeLabel}</td>
+    </tr>`;
+  });
+
+  return `<div class="grid-wrap">
+    <table class="run-table">
+      <thead><tr>
+        <th class="run-th">Date</th>
+        <th class="run-th">Distance</th>
+        <th class="run-th">Type</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function startEditDist(dateKey) {
+  editingRunDate = dateKey;
+  render();
+}
+
+function saveRunDist(dateKey) {
+  const inp = document.getElementById('run-dist-' + dateKey);
+  if (!inp) return;
+  const val = inp.value.trim();
+  if (!appState.running) appState.running = {};
+  if (!appState.running[dateKey]) appState.running[dateKey] = {};
+  if (val) appState.running[dateKey].distance = val;
+  else     delete appState.running[dateKey].distance;
+  if (!Object.keys(appState.running[dateKey]).length) delete appState.running[dateKey];
+  editingRunDate = null;
+  save(); render();
+}
+
+function toggleRunType(dateKey) {
+  if (!appState.running) appState.running = {};
+  if (!appState.running[dateKey]) appState.running[dateKey] = {};
+  const cur = appState.running[dateKey].type || '';
+  if      (!cur)               appState.running[dateKey].type = 'outside';
+  else if (cur === 'outside')  appState.running[dateKey].type = 'treadmill';
+  else {
+    delete appState.running[dateKey].type;
+    if (!Object.keys(appState.running[dateKey]).length) delete appState.running[dateKey];
+  }
+  save(); render();
+}
+
+/* -- render -------------------------------------------- */
+
+function render() {
+  const dates   = windowDates();
+  const habits  = HABITS[activeTab];
+  const todayDk = dk(new Date());
+
+  // Update tab active states
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', ['dashy', 'daily', 'exercise', 'running'][i] === activeTab);
+  });
+
+  // Range label
+  const first = dates[0], last = dates[6];
+  const rangeLabel = (first.getMonth() === last.getMonth())
+    ? `${MONTHS[first.getMonth()]} ${first.getDate()} &ndash; ${last.getDate()}, ${YEAR}`
+    : `${MONTHS[first.getMonth()]} ${first.getDate()} &ndash; ${MONTHS[last.getMonth()]} ${last.getDate()}, ${YEAR}`;
+
+  // Navigation bounds
+  const canPrev = winStart > YEAR_START;
+  const maxStart = new Date(YEAR_END);
+  maxStart.setDate(maxStart.getDate() - 6);
+  const canNext = winStart < maxStart;
+
+  if (activeTab === 'dashy') {
+    document.getElementById('view-content').innerHTML = renderDashboard();
+    return;
+  }
+
+  if (activeTab === 'running') {
+    document.getElementById('view-content').innerHTML = `
+      <div class="nav-row">
+        <button class="nav-btn" onclick="navigate(-1)" ${canPrev ? '' : 'disabled'}>&#x2190; Prev</button>
+        <span class="nav-label">${rangeLabel}</span>
+        <button class="nav-btn" onclick="navigate(1)" ${canNext ? '' : 'disabled'}>Next &#x2192;</button>
+      </div>
+      ${renderRunning(dates, todayDk)}`;
+    if (editingRunDate) {
+      const inp = document.getElementById('run-dist-' + editingRunDate);
+      if (inp) { inp.focus(); inp.select(); }
+    }
+    return;
+  }
+
+  // Build grid HTML
+  let thead = `<tr>
+    <th class="habit-label-col"></th>`;
+
+  dates.forEach(d => {
+    const isToday = dk(d) === todayDk;
+    thead += `<th class="col-header${isToday ? ' today-col' : ''}">
+      <span class="day-name">${DAY_ABBR[d.getDay()]}</span>
+      <span class="day-num">${d.getDate()}</span>
+      <span class="day-month">${MONTHS[d.getMonth()]}</span>
+    </th>`;
+  });
+  thead += '</tr>';
+
+  let tbody = '';
+  habits.forEach(h => {
+    tbody += `<tr><td class="habit-label-col">${h.name}</td>`;
+    dates.forEach(d => {
+      const key     = dk(d);
+      const val     = appState.completions[key] && appState.completions[key][h.id];
+      const isToday = key === todayDk;
+      let cellCls, icon, iconStyle = '';
+      if (h.type === 'duration') {
+        cellCls   = val ? 'dur' : 'unset';
+        icon      = val ? `${val}m` : '';
+        iconStyle = ' style="font-size:12px"';
+      } else if (h.type === 'count') {
+        cellCls   = val ? (COUNT_CLASS[val] || '') : 'unset';
+        icon      = val || '';
+        iconStyle = ' style="font-size:13px"';
+      } else {
+        cellCls = val === 'yes' ? 'yes' : val === 'no' ? 'no' : 'unset';
+        icon    = val === 'yes' ? '&#x2713;' : val === 'no' ? '&#x2717;' : '';
+      }
+      tbody += `<td class="cell ${cellCls}${isToday ? ' today-col' : ''}"
+                    onclick="toggleCell('${h.id}','${key}')">
+                  <div class="cell-icon"${iconStyle}>${icon}</div>
+                </td>`;
+    });
+    tbody += '</tr>';
+  });
+
+  document.getElementById('view-content').innerHTML = `
+    <div class="nav-row">
+      <button class="nav-btn" onclick="navigate(-1)" ${canPrev ? '' : 'disabled'}>&#x2190; Prev</button>
+      <span class="nav-label">${rangeLabel}</span>
+      <button class="nav-btn" onclick="navigate(1)" ${canNext ? '' : 'disabled'}>Next &#x2192;</button>
+    </div>
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>${thead}</thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot yes"></div> Yes</div>
+      <div class="legend-item"><div class="legend-dot no"></div> No</div>
+      <div class="legend-item"><div class="legend-dot unset"></div> Not set</div>
+    </div>`;
+}
+
+function parseCSVRow(line) {
+  const cells = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === ',' && !inQ) {
+      cells.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+function exportCSV() {
+  const allHabits = [...HABITS.daily, ...HABITS.exercise];
+  const dates = Object.keys(appState.completions).sort();
+  if (!dates.length) { alert('No data to export.'); return; }
+  const header = ['Date', ...allHabits.map(h => h.name)];
+  const rows = dates.map(date => {
+    const day = appState.completions[date] || {};
+    return [date, ...allHabits.map(h => {
+      const v = day[h.id];
+      return v !== undefined ? v : '';
+    })];
+  });
+  const csv = [header, ...rows]
+    .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `habits-${dk(new Date())}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importCSV(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const lines = ev.target.result.trim().split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) throw new Error('No data rows found');
+      const headers = parseCSVRow(lines[0]);
+      if (headers[0] !== 'Date') throw new Error('First column must be "Date"');
+      const allHabits = [...HABITS.daily, ...HABITS.exercise];
+      const nameToId = Object.fromEntries(allHabits.map(h => [h.name, h.id]));
+      const colIds = headers.slice(1).map(name => nameToId[name] || null);
+      for (let i = 1; i < lines.length; i++) {
+        const cells = parseCSVRow(lines[i]);
+        const date = cells[0];
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        if (!appState.completions[date]) appState.completions[date] = {};
+        cells.slice(1).forEach((val, idx) => {
+          const id = colIds[idx];
+          if (!id) return;
+          if (val === '') delete appState.completions[date][id];
+          else appState.completions[date][id] = val;
+        });
+        if (!Object.keys(appState.completions[date]).length) delete appState.completions[date];
+      }
+      save(); render();
+    } catch(err) {
+      alert('CSV import failed: ' + err.message);
+    }
+    e.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+/* -- Google Drive --------------------------------------- */
+
+let driveToken      = null;
+let tokenClient     = null;
+let autoLoadOnStart = false;
+const DEFAULT_CLIENT_ID = '983017318004-stq94jbt582aqhe7ts17kqg1k56kr32g.apps.googleusercontent.com';
+let driveClientId = localStorage.getItem('gdrive-client-id') || DEFAULT_CLIENT_ID;
+let driveFolderId = localStorage.getItem('gdrive-folder-id') || '';
+let driveFileId   = localStorage.getItem('gdrive-file-id')   || '';
+
+function updateDriveDot() {
+  const dot = document.getElementById('drive-dot');
+  if (dot) dot.className = 'drive-status' + (driveToken ? ' connected' : '');
+}
+
+function initTokenClient() {
+  if (!driveClientId || typeof google === 'undefined') return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: driveClientId,
+    scope: 'https://www.googleapis.com/auth/drive',
+    callback: resp => {
+      if (resp.error) { showToast('Sign-in failed: ' + resp.error, true); return; }
+      driveToken = resp.access_token;
+      updateDriveDot();
+      if (autoLoadOnStart) { autoLoadOnStart = false; loadFromDrive(); }
+      else showToast('Signed in to Google ✓');
+    }
+  });
+}
+
+function onGsiLoaded() {
+  if (!driveClientId) return;
+  autoLoadOnStart = true;
+  initTokenClient();
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+
+function requireToken(then) {
+  if (driveToken) { then(); return; }
+  if (!driveClientId) { openDriveModal(); return; }
+  if (!tokenClient) initTokenClient();
+  if (!tokenClient) { showToast('Google API not loaded yet � try again shortly', true); return; }
+  tokenClient.callback = resp => {
+    if (resp.error) { showToast('Sign-in failed: ' + resp.error, true); return; }
+    driveToken = resp.access_token;
+    updateDriveDot();
+    then();
+  };
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+
+async function driveRequest(url, options = {}) {
+  const resp = await fetch(url, {
+    ...options,
+    headers: { Authorization: `Bearer ${driveToken}`, ...(options.headers || {}) }
+  });
+  if (resp.status === 401) { driveToken = null; updateDriveDot(); const e = new Error('Token expired'); e.status = 401; throw e; }
+  if (!resp.ok) { const e = new Error(await resp.text()); e.status = resp.status; throw e; }
+  return resp.json();
+}
+
+async function createDriveFile(name, content) {
+  const meta = { name, mimeType: 'application/json' };
+  if (driveFolderId) meta.parents = [driveFolderId];
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+  form.append('file',     new Blob([content],             { type: 'application/json' }));
+  return driveRequest(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+    { method: 'POST', body: form }
+  );
+}
+
+async function patchDriveFile(fileId, content) {
+  return driveRequest(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: content }
+  );
+}
+
+async function searchDriveFiles(name) {
+  let q = `name='${name}' and trashed=false`;
+  if (driveFolderId) q += ` and '${driveFolderId}' in parents`;
+  const data = await driveRequest(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`
+  );
+  return data.files || [];
+}
+
+async function readDriveFile(fileId) {
+  const resp = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    { headers: { Authorization: `Bearer ${driveToken}` } }
+  );
+  if (resp.status === 401) { driveToken = null; updateDriveDot(); const e = new Error('Token expired'); e.status = 401; throw e; }
+  if (!resp.ok) { const e = new Error(await resp.text()); e.status = resp.status; throw e; }
+  return resp.json();
+}
+
+async function saveToDrive(quiet = false, retry = true) {
+  requireToken(async () => {
+    try {
+      const content = JSON.stringify(appState, null, 2);
+      if (!driveFileId) {
+        const files = await searchDriveFiles('habit-tracker-data.json');
+        if (files.length) {
+          driveFileId = files[0].id;
+          localStorage.setItem('gdrive-file-id', driveFileId);
+        }
+      }
+      if (driveFileId) {
+        await patchDriveFile(driveFileId, content);
+      } else {
+        const file = await createDriveFile('habit-tracker-data.json', content);
+        driveFileId = file.id;
+        localStorage.setItem('gdrive-file-id', driveFileId);
+      }
+      if (!quiet) showToast('Saved to Google Drive ✓');
+    } catch(e) {
+      if (e.status === 401 && retry) { driveToken = null; saveToDrive(quiet, false); return; }
+      if (e.status === 404) {
+        driveFileId = ''; localStorage.removeItem('gdrive-file-id');
+        saveToDrive(quiet, retry); return;
+      }
+      if (!quiet) showToast('Save failed: ' + e.message, true);
+    }
+  });
+}
+
+async function loadFromDrive(retry = true) {
+  requireToken(async () => {
+    try {
+      let fileId = driveFileId;
+      if (!fileId) {
+        const files = await searchDriveFiles('habit-tracker-data.json');
+        if (!files.length) { showToast('No Drive data found — starting fresh'); return; }
+        fileId = files[0].id;
+        driveFileId = fileId;
+        localStorage.setItem('gdrive-file-id', fileId);
+      }
+      const data = await readDriveFile(fileId);
+      if (!data.completions) throw new Error('Unrecognised file format');
+      appState = data;
+      if (!appState.running) appState.running = {};
+      save(); render();
+      showToast('Loaded from Google Drive ✓');
+    } catch(e) {
+      if (e.status === 401 && retry) { driveToken = null; loadFromDrive(false); return; }
+      if (e.status === 404) {
+        driveFileId = ''; localStorage.removeItem('gdrive-file-id');
+        const found = await searchDriveFiles('habit-tracker-data.json');
+        if (found.length) { driveFileId = found[0].id; localStorage.setItem('gdrive-file-id', driveFileId); loadFromDrive(false); return; }
+        showToast('No Drive data found — starting fresh'); return;
+      }
+      showToast('Load failed: ' + e.message, true);
+    }
+  });
+}
+
+function openDriveModal() {
+  document.getElementById('drive-client-id-inp').value = driveClientId;
+  document.getElementById('drive-folder-id-inp').value = driveFolderId;
+  document.getElementById('drive-modal').classList.add('open');
+}
+function closeDriveModal() {
+  document.getElementById('drive-modal').classList.remove('open');
+}
+function saveDriveSettings() {
+  driveClientId = document.getElementById('drive-client-id-inp').value.trim();
+  driveFolderId = document.getElementById('drive-folder-id-inp').value.trim();
+  localStorage.setItem('gdrive-client-id', driveClientId);
+  localStorage.setItem('gdrive-folder-id', driveFolderId);
+  driveToken = null; tokenClient = null;
+  updateDriveDot();
+  closeDriveModal();
+  if (driveClientId) initTokenClient();
+}
+
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? '#b91c1c' : '#15803d';
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// Auto-save when user switches away or closes the tab
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && driveToken && driveFileId) saveToDrive(true);
+});
+
+// Best-effort keepalive save on hard close
+window.addEventListener('beforeunload', () => {
+  if (!driveToken || !driveFileId) return;
+  fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(appState, null, 2),
+      keepalive: true
+    }
+  );
+});
+
+load();
+
+// Register service worker for PWA / offline support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
