@@ -72,6 +72,13 @@
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab:hover:not(.active) { color: var(--text); }
 
+  /* Swipe transition */
+  #view-content { touch-action: pan-y; }
+  #view-content.slide-left  { animation: slideInLeft  0.22s ease both; }
+  #view-content.slide-right { animation: slideInRight 0.22s ease both; }
+  @keyframes slideInLeft  { from { opacity: 0.4; transform: translateX(40px);  } to { opacity: 1; transform: translateX(0); } }
+  @keyframes slideInRight { from { opacity: 0.4; transform: translateX(-40px); } to { opacity: 1; transform: translateX(0); } }
+
   /* Navigation */
   .nav-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; gap: 12px; }
   .nav-btn { background: var(--bg-secondary); border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); padding: 7px 16px; font-size: 13px; cursor: pointer; color: var(--text); white-space: nowrap; transition: background 0.1s; }
@@ -388,7 +395,18 @@ function navigate(dir) {
   render();
 }
 
-function switchTab(t) { activeTab = t; render(); }
+const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running'];
+
+function switchTab(t, dir) {
+  const el = document.getElementById('view-content');
+  activeTab = t;
+  render();
+  if (el && dir) {
+    el.classList.remove('slide-left', 'slide-right');
+    void el.offsetWidth; // force reflow so animation restarts
+    el.classList.add(dir === 1 ? 'slide-left' : 'slide-right');
+  }
+}
 
 function exportData() {
   const filename = `habits-${dk(new Date())}.json`;
@@ -1078,6 +1096,23 @@ window.addEventListener('beforeunload', () => {
 });
 
 load();
+
+// Swipe between tabs
+(function () {
+  let x0 = 0, y0 = 0;
+  document.addEventListener('touchstart', e => {
+    x0 = e.touches[0].clientX;
+    y0 = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const idx = TAB_ORDER.indexOf(activeTab);
+    if (dx < 0 && idx < TAB_ORDER.length - 1) switchTab(TAB_ORDER[idx + 1],  1);
+    if (dx > 0 && idx > 0)                    switchTab(TAB_ORDER[idx - 1], -1);
+  }, { passive: true });
+})();
 
 // Register service worker for PWA / offline support
 if ('serviceWorker' in navigator) {
