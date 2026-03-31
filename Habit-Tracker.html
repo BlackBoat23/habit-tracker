@@ -59,6 +59,23 @@
   body::before { content: ''; display: block; height: 3px; background: linear-gradient(90deg, #EF0107 0%, #EF0107 60%, #ffffff 60%, #ffffff 70%, #EF0107 70%); position: fixed; top: 0; left: 0; right: 0; z-index: 999; }
   .app { max-width: 700px; margin: 0 auto; padding: 2.25rem 1.25rem 2rem; }
 
+  /* Landscape layout for phones */
+  @media (orientation: landscape) and (max-height: 540px) {
+    .app { padding: 1rem 1rem 1rem; max-width: 100%; }
+    .header { margin-bottom: 0.75rem; }
+    .title { font-size: 18px; }
+    .tabs { margin-bottom: 0.75rem; }
+    .tab { padding: 6px 14px 10px; font-size: 13px; }
+    .dash-summary { grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+    .dash-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .dash-stat { padding: 8px 10px; }
+    .dash-stat-val { font-size: 17px; }
+    .dash-card { padding: 12px 14px; }
+    .dash-card-title { margin-bottom: 8px; }
+    .nav-row { margin-bottom: 0.75rem; }
+    :root { --cell-h: 46px; --cell-w: 54px; }
+  }
+
   /* Header */
   .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; }
   .title { font-size: 22px; font-weight: 500; }
@@ -1099,12 +1116,15 @@ load();
 
 // Swipe between tabs
 (function () {
-  let x0 = 0, y0 = 0;
+  let x0 = 0, y0 = 0, blocked = false;
   document.addEventListener('touchstart', e => {
     x0 = e.touches[0].clientX;
     y0 = e.touches[0].clientY;
+    // Block tab-swipe if touch starts inside a horizontally-scrollable grid
+    blocked = !!e.target.closest('.grid-wrap');
   }, { passive: true });
   document.addEventListener('touchend', e => {
+    if (blocked) return;
     const dx = e.changedTouches[0].clientX - x0;
     const dy = e.changedTouches[0].clientY - y0;
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
