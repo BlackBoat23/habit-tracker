@@ -6,7 +6,7 @@
   "start_url": "/habit-tracker/Habit-Tracker.html",
   "scope": "/habit-tracker/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#1a1a1a",
   "theme_color": "#EF0107",
   "icons": [
