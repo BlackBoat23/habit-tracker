@@ -326,9 +326,20 @@
 <div id="toast"></div>
 
 <script>
+// ─── Display Lookup Arrays ────────────────────────────────────────────────────
+// Indexed directly by JS Date methods: getMonth() returns 0–11, getDay() returns
+// 0 (Sun) – 6 (Sat). Using arrays instead of switch/if chains is O(1) vs O(n).
 const MONTHS   = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAY_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
+// ─── Habit Schema ─────────────────────────────────────────────────────────────
+// Single source of truth for all tracked habits. Each entry needs:
+//   id   – unique string key stored in appState.completions[dateKey][id]
+//   name – human-readable label shown in the UI
+//   type – (optional) controls the cell toggle cycle:
+//           omitted  → boolean yes / no
+//           'count'  → cycles through COUNT_CYCLE (drinks per day)
+//           'duration' → cycles through DURATION_CYCLE (minutes of exercise)
 const HABITS = {
   daily: [
     { id: 'stretching', name: 'Stretching' },
@@ -340,17 +351,38 @@ const HABITS = {
     { id: 'nobooze',    name: 'No Booze', type: 'count' }
   ],
   exercise: [
-    { id: 'tennis',       name: 'Tennis',        type: 'duration' },
-    { id: 'basketball',   name: 'Basketball',    type: 'duration' },
-    { id: 'tabletennis',  name: 'Table Tennis',  type: 'duration' },
-    { id: 'hike',         name: 'Hike',          type: 'duration' }
+    { id: 'tennis',      name: 'Tennis',       type: 'duration' },
+    { id: 'basketball',  name: 'Basketball',   type: 'duration' },
+    { id: 'tabletennis', name: 'Table Tennis', type: 'duration' },
+    { id: 'hike',        name: 'Hike',         type: 'duration' }
   ]
 };
 
+// Cell-value cycles. Tapping past the last value deletes the entry (resets to blank).
+// Duration values are stored as minute strings ('60' = 60 min session).
 const DURATION_CYCLE = ['30', '60', '90', '120', '150', '180'];
-const COUNT_CYCLE = ['0', '1', '2', '3', '4', '5+'];
-const COUNT_CLASS = { '0': 'cnt-0', '1': 'cnt-1', '2': 'cnt-2', '3': 'cnt-3', '4': 'cnt-4', '5+': 'cnt-5p' };
+const COUNT_CYCLE    = ['0', '1', '2', '3', '4', '5+'];
+// Maps each count string to the CSS class that applies its colour coding.
+const COUNT_CLASS    = { '0':'cnt-0', '1':'cnt-1', '2':'cnt-2', '3':'cnt-3', '4':'cnt-4', '5+':'cnt-5p' };
 
+// ─── Pre-computed Derived Collections ─────────────────────────────────────────
+// These are built once at script load so rendering functions can read them in O(1)
+// instead of re-computing a filtered or spread array on every render call.
+
+// Flat Map of habitId → habit object.
+// Replaces the old findHabit() O(n) nested-loop scan with a single Map.get() call.
+const HABIT_MAP = new Map([...HABITS.daily, ...HABITS.exercise].map(h => [h.id, h]));
+
+// The subset of daily habits that use a simple yes/no toggle (no 'type' field).
+// Used in the dashboard and grid render; avoids repeated .filter() on every render.
+const YES_NO_HABITS = HABITS.daily.filter(h => !h.type);
+
+// All habits in display order. Used for CSV export/import column alignment.
+const ALL_HABITS = [...HABITS.daily, ...HABITS.exercise];
+
+// ─── Boat Maintenance Tasks ───────────────────────────────────────────────────
+// Ordered list of recurring boat maintenance tasks shown in the Boat tab.
+// To add or rename a task, edit this array — the UI rebuilds automatically.
 const BOAT_TASKS = [
   'Run Engine',
   'Fill Water Tank',
@@ -360,41 +392,59 @@ const BOAT_TASKS = [
   'Diesel Tank Bow Fill Up'
 ];
 
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+// ─── XSS Sanitiser ───────────────────────────────────────────────────────────
+// Escapes HTML special characters before inserting any user-supplied string into
+// innerHTML. Using a single regex with a lookup object is one scan of the string
+// instead of four chained .replace() calls (one pass vs four).
+const _ESC = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' };
+function esc(s) { return String(s).replace(/[&<>"]/g, c => _ESC[c]); }
 
-const YEAR       = 2026;
-const YEAR_START = new Date(YEAR, 0, 1);   // Jan 1
-const YEAR_END   = new Date(YEAR, 11, 31); // Dec 31
+// ─── Year Boundaries ─────────────────────────────────────────────────────────
+// The tracker is scoped to a single calendar year. All date navigation is clamped
+// so the 7-day window never starts before Jan 1 or ends after Dec 31.
+// YEAR_MAX_START is cached here (Dec 25) so clamp() doesn't create a new Date
+// object and call setDate() on every navigation button press.
+const YEAR           = 2026;
+const YEAR_START     = new Date(YEAR, 0,  1);  // 1 Jan  — earliest window start
+const YEAR_END       = new Date(YEAR, 11, 31); // 31 Dec
+const YEAR_MAX_START = new Date(YEAR, 11, 25); // 25 Dec — latest start (window ends 31 Dec)
 
 let appState       = { completions: {}, running: {}, boatMaintenance: {}, boatTodos: [] };
 let activeTab      = 'dashy';
 let editingRunDate = null;
 let winStart   = defaultWindowStart();
 
-/* -- helpers ------------------------------------------- */
+// ─── Date Helpers ─────────────────────────────────────────────────────────────
 
+// Returns an ISO-8601 date string 'YYYY-MM-DD' for a given Date object.
+// This format is used as the key in appState.completions and appState.running,
+// making date-based lookups a simple object property access.
 function dk(d) { return d.toISOString().slice(0, 10); }
 
+// Computes the Monday that starts the current week, then clamps it within the year.
+// If the current year isn't YEAR (e.g., the app is opened in 2027), defaults to
+// the start of YEAR so the view is always meaningful.
 function defaultWindowStart() {
-  const t = new Date();
+  const t    = new Date();
   const base = (t.getFullYear() === YEAR) ? new Date(t) : new Date(YEAR_START);
-  // Snap to Monday of that week
-  const dow = base.getDay();
+  const dow  = base.getDay();
+  // Shift back to Monday: Sunday (0) goes back 6 days, other days go back (dow-1).
   base.setDate(base.getDate() - (dow === 0 ? 6 : dow - 1));
   return clamp(base);
 }
 
+// Clamps a proposed window-start Date to [YEAR_START, YEAR_MAX_START].
+// Uses the pre-computed YEAR_MAX_START constant — avoids creating a new Date and
+// calling setDate() on every navigation press (old code did this every time).
 function clamp(d) {
-  const s = new Date(d);
-  if (s < YEAR_START) return new Date(YEAR_START);
-  const maxStart = new Date(YEAR_END);
-  maxStart.setDate(maxStart.getDate() - 6);
-  if (s > maxStart) return maxStart;
+  const s = new Date(d); // copy so we never mutate the caller's object
+  if (s < YEAR_START)     return new Date(YEAR_START);
+  if (s > YEAR_MAX_START) return new Date(YEAR_MAX_START);
   return s;
 }
 
+// Returns an array of 7 consecutive Date objects starting from winStart.
+// This is the visible week window used by the daily, exercise, and running grids.
 function windowDates() {
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(winStart);
@@ -403,37 +453,47 @@ function windowDates() {
   });
 }
 
-/* -- persistence --------------------------------------- */
+// ─── Local Persistence ────────────────────────────────────────────────────────
+// appState is the single source of truth for all user data. It is mirrored to
+// two storage layers so the app works offline and stays in sync across devices:
+//   1. localStorage  — instant read/write, survives page refresh, device-local
+//   2. Google Drive  — cross-device sync, loaded on startup and on app foreground
 
+// Reads the saved state from localStorage and kicks off the initial render.
+// Defensive defaults guard against data added in future app versions being absent
+// in an older saved snapshot (e.g., a user who hasn't opened the app in a while).
 function load() {
   try {
     const raw = localStorage.getItem('habit-tracker-v3');
     if (raw) appState = JSON.parse(raw);
-    if (!appState.running) appState.running = {};
-    if (!appState.boatMaintenance) appState.boatMaintenance = {};
-    if (!appState.boatTodos) appState.boatTodos = [];
-  } catch(e) {}
+    if (!appState.running)          appState.running          = {};
+    if (!appState.boatMaintenance)  appState.boatMaintenance  = {};
+    if (!appState.boatTodos)        appState.boatTodos        = [];
+  } catch(e) { /* corrupt storage — start fresh with default appState */ }
   render();
 }
 
+// Serialises appState to localStorage. Called after every mutation so the local
+// copy is always current. Wrapped in try/catch because localStorage can throw
+// if the browser is in private mode or storage quota is exceeded.
 function save() {
   try { localStorage.setItem('habit-tracker-v3', JSON.stringify(appState)); } catch(e) {}
 }
 
-/* -- actions ------------------------------------------- */
+// ─── User Actions ─────────────────────────────────────────────────────────────
 
-function findHabit(id) {
-  for (const tab of Object.values(HABITS)) {
-    const h = tab.find(h => h.id === id);
-    if (h) return h;
-  }
-  return null;
-}
-
+// Advances the cell value for a given habit on a given date through its cycle.
+// Uses HABIT_MAP.get() — a single O(1) Map lookup — rather than the old
+// findHabit() which iterated over all habits with a nested for/find loop.
+// Cycling logic per habit type:
+//   duration → 30 → 60 → … → 180 → (delete)
+//   count    →  0 →  1 → … →  5+ → (delete)
+//   boolean  → yes → no → (delete)
+// Deleting the entry keeps appState compact (no 'unset' values stored on disk).
 function toggleCell(habitId, dateKey) {
   if (!appState.completions[dateKey]) appState.completions[dateKey] = {};
   const cur   = appState.completions[dateKey][habitId];
-  const habit = findHabit(habitId);
+  const habit = HABIT_MAP.get(habitId); // O(1) lookup via pre-built Map
   if (habit && habit.type === 'duration') {
     const idx = DURATION_CYCLE.indexOf(cur);
     if (idx < DURATION_CYCLE.length - 1) appState.completions[dateKey][habitId] = DURATION_CYCLE[idx + 1];
@@ -450,6 +510,8 @@ function toggleCell(habitId, dateKey) {
   save(); render();
 }
 
+// Shifts the 7-day window forward (dir=1) or backward (dir=-1) by one week,
+// then clamps the result so it never falls outside the year boundary.
 function navigate(dir) {
   const d = new Date(winStart);
   d.setDate(d.getDate() + dir * 7);
@@ -457,29 +519,42 @@ function navigate(dir) {
   render();
 }
 
+// Defines the left-to-right tab order used by both the swipe gesture handler
+// and the prev/next navigation arrows. To add a new tab, append its id here
+// AND add a matching <button class="tab"> in the HTML.
 const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running', 'boat'];
 
+// Switches the active tab and optionally plays a slide animation.
+// dir=1 slides in from the right (swiping left → moving forward in TAB_ORDER).
+// dir=-1 slides in from the left (swiping right → moving backward).
+// void el.offsetWidth forces a browser reflow so removing and re-adding the
+// animation class actually restarts the CSS keyframe from the beginning.
 function switchTab(t, dir) {
   const el = document.getElementById('view-content');
   activeTab = t;
   render();
   if (el && dir) {
     el.classList.remove('slide-left', 'slide-right');
-    void el.offsetWidth; // force reflow so animation restarts
+    void el.offsetWidth; // reflow checkpoint — required to reset the animation
     el.classList.add(dir === 1 ? 'slide-left' : 'slide-right');
   }
 }
 
+// Serialises the full appState to a timestamped JSON file and triggers a browser
+// download. URL.createObjectURL / revokeObjectURL creates a temporary in-memory
+// file URL and immediately cleans it up after the download starts.
 function exportData() {
-  const filename = `habits-${dk(new Date())}.json`;
   const blob = new Blob([JSON.stringify(appState, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `habits-${dk(new Date())}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
+// Reads a previously exported JSON file from disk and replaces the current
+// appState. Validates the 'completions' key as a minimal format check before
+// overwriting. Resets the file input so the same file can be re-imported if needed.
 function importData(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -494,59 +569,78 @@ function importData(e) {
     } catch(err) {
       alert('Import failed: file does not appear to be a valid habit tracker export.');
     }
-    e.target.value = '';
+    e.target.value = ''; // reset so the same file can be selected again
   };
   reader.readAsText(file);
 }
 
-/* -- dashboard ----------------------------------------- */
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 
 function renderDashboard() {
-  const today  = new Date();
+  const today   = new Date();
   const todayDk = dk(today);
-  const last7  = Array.from({length: 7}, (_, i) => {
-    const d = new Date(today); d.setDate(d.getDate() - (6 - i)); return d;
+
+  // Build the 7-day rolling window (today and the 6 days before it).
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (6 - i));
+    return d;
   });
 
-  /* -- summary stats -- */
-  const todayComp   = appState.completions[todayDk] || {};
-  const todayHabits = HABITS.daily.filter(h => !h.type);
-  const todayDone   = todayHabits.filter(h => todayComp[h.id] === 'yes').length;
+  // Pre-compute date-key strings and completion snapshots for the window ONCE.
+  // Every loop below reads from last7Keys[i] / last7Comps[i] instead of calling
+  // dk(d) and doing an appState lookup on every iteration — reducing repeated
+  // work from O(7 × n_loops) individual lookups to a single O(7) pass up front.
+  const last7Keys  = last7.map(dk);
+  const last7Comps = last7Keys.map(k => appState.completions[k] || {});
 
-  const runLast7    = last7.reduce((s, d) => s + (parseFloat((appState.running||{})[dk(d)]?.distance)||0), 0);
+  // ── Summary stat tiles ──────────────────────────────────────────────────────
+  // YES_NO_HABITS is the pre-filtered constant (daily habits without a 'type').
+  // Re-used below for habitBars so it is only computed once per render.
+  const todayComp = appState.completions[todayDk] || {};
+  const todayDone = YES_NO_HABITS.filter(h => todayComp[h.id] === 'yes').length;
 
-  const exSessions  = last7.reduce((s, d) => {
-    const c = appState.completions[dk(d)] || {};
-    return s + HABITS.exercise.filter(h => c[h.id]).length;
-  }, 0);
+  // Total km run over the 7-day window; uses the pre-built last7Keys array.
+  const running   = appState.running || {};
+  const runLast7  = last7Keys.reduce((s, k) => s + (parseFloat(running[k]?.distance) || 0), 0);
 
-  const allStreaks = HABITS.daily.map(h => {
+  // Count exercise sessions (any exercise habit with a value) across the window.
+  const exSessions = last7Comps.reduce(
+    (s, c) => s + HABITS.exercise.filter(h => c[h.id]).length, 0
+  );
+
+  // Longest current streak for any daily yes/no habit.
+  // Walks backward from today until a day without 'yes' breaks the chain.
+  const bestStreak = Math.max(0, ...YES_NO_HABITS.map(h => {
     let streak = 0, d = new Date(today);
-    while (true) {
-      const v = (appState.completions[dk(d)] || {})[h.id];
-      if (v === 'yes') { streak++; d.setDate(d.getDate() - 1); } else break;
+    while ((appState.completions[dk(d)] || {})[h.id] === 'yes') {
+      streak++;
+      d.setDate(d.getDate() - 1);
     }
     return streak;
-  });
-  const bestStreak = Math.max(0, ...allStreaks);
+  }));
 
-  /* -- year-to-date running -- */
-  const RUN_GOAL = 500;
-  const yearRunKm = Object.entries(appState.running || {}).reduce((s, [date, e]) => {
-    return date.startsWith(`${YEAR}-`) ? s + (parseFloat(e.distance) || 0) : s;
-  }, 0);
+  // ── Year-to-date running ────────────────────────────────────────────────────
+  const RUN_GOAL = 500; // annual km target
+  const yearRunKm = Object.entries(running).reduce((s, [date, e]) =>
+    date.startsWith(`${YEAR}-`) ? s + (parseFloat(e.distance) || 0) : s, 0
+  );
   const yearRunPct    = Math.min(100, Math.round(yearRunKm / RUN_GOAL * 100));
   const yearRunRemain = Math.max(0, RUN_GOAL - yearRunKm).toFixed(1);
 
-  /* -- year-to-date exercise by activity -- */
-  const yearExMins = {};
-  HABITS.exercise.forEach(h => { yearExMins[h.id] = 0; });
+  // ── Year-to-date exercise minutes by activity ───────────────────────────────
+  // Single pass over all completion records for the year; accumulates minutes
+  // per exercise habit id into a plain object for O(1) reads when building the bars.
+  const yearExMins = Object.fromEntries(HABITS.exercise.map(h => [h.id, 0]));
   Object.entries(appState.completions).forEach(([date, day]) => {
     if (!date.startsWith(`${YEAR}-`)) return;
-    HABITS.exercise.forEach(h => { if (day[h.id]) yearExMins[h.id] += parseInt(day[h.id]) || 0; });
+    HABITS.exercise.forEach(h => {
+      if (day[h.id]) yearExMins[h.id] += parseInt(day[h.id]) || 0;
+    });
   });
   const yearExTotalMins = Object.values(yearExMins).reduce((s, v) => s + v, 0);
   const yearExTotalHrs  = (yearExTotalMins / 60).toFixed(1);
+  // Scale all activity bars relative to the busiest activity (prevents empty chart).
   const maxActivityMins = Math.max(...Object.values(yearExMins), 1);
 
   const yearExRows = HABITS.exercise.map(h => {
@@ -561,16 +655,16 @@ function renderDashboard() {
   }).join('');
 
   const summaryHtml = `<div class="dash-summary">
-    <div class="dash-stat"><div class="dash-stat-val">${todayDone}/${todayHabits.length}</div><div class="dash-stat-label">Habits today</div></div>
+    <div class="dash-stat"><div class="dash-stat-val">${todayDone}/${YES_NO_HABITS.length}</div><div class="dash-stat-label">Habits today</div></div>
     <div class="dash-stat"><div class="dash-stat-val">${bestStreak}</div><div class="dash-stat-label">Best streak</div></div>
     <div class="dash-stat"><div class="dash-stat-val">${runLast7.toFixed(1)}<span style="font-size:13px;font-weight:400"> km</span></div><div class="dash-stat-label">Running this week</div></div>
     <div class="dash-stat"><div class="dash-stat-val">${exSessions}</div><div class="dash-stat-label">Exercise sessions</div></div>
   </div>`;
 
-  /* -- daily habits bars -- */
-  const yesNoHabits = HABITS.daily.filter(h => !h.type);
-  const habitBars = yesNoHabits.map(h => {
-    const yes = last7.filter(d => (appState.completions[dk(d)]||{})[h.id] === 'yes').length;
+  // ── Daily habit completion bars (last 7 days) ───────────────────────────────
+  // Reads from last7Comps — no dk() calls or appState lookups inside this loop.
+  const habitBars = YES_NO_HABITS.map(h => {
+    const yes = last7Comps.filter(c => c[h.id] === 'yes').length;
     const pct = Math.round(yes / 7 * 100);
     return `<div class="dash-habit-row">
       <span class="dash-h-name">${h.name}</span>
@@ -579,13 +673,15 @@ function renderDashboard() {
     </div>`;
   }).join('');
 
-  /* -- no booze bars -- */
-  const bkeys  = ['0','1','2','3','4','5+'];
-  const bcBg   = {'0':'#dcfce7','1':'#ecfccb','2':'#fef9c3','3':'#fed7aa','4':'#fdba74','5+':'#fee2e2'};
-  const bcText = {'0':'#15803d','1':'#3f6212','2':'#854d0e','3':'#9a3412','4':'#c2410c','5+':'#b91c1c'};
+  // ── No Booze breakdown (last 7 days) ───────────────────────────────────────
+  // Colour constants defined inline — mirrors the CSS cnt-* classes for theming.
+  const bkeys    = ['0','1','2','3','4','5+'];
+  const bcBg     = {'0':'#dcfce7','1':'#ecfccb','2':'#fef9c3','3':'#fed7aa','4':'#fdba74','5+':'#fee2e2'};
+  const bcText   = {'0':'#15803d','1':'#3f6212','2':'#854d0e','3':'#9a3412','4':'#c2410c','5+':'#b91c1c'};
   const bcLabels = {'0':'None','1':'1 drink','2':'2 drinks','3':'3 drinks','4':'4 drinks','5+':'5+ drinks'};
-  const bcounts = Object.fromEntries(bkeys.map(k => [k, 0]));
-  last7.forEach(d => { const v = (appState.completions[dk(d)]||{}).nobooze; if (v && bcounts[v] !== undefined) bcounts[v]++; });
+  const bcounts  = Object.fromEntries(bkeys.map(k => [k, 0]));
+  // Tally each day's recorded drink count using pre-resolved last7Comps.
+  last7Comps.forEach(c => { const v = c.nobooze; if (v && bcounts[v] !== undefined) bcounts[v]++; });
   const boozeRows = bkeys.map(k => {
     const pct = Math.round(bcounts[k] / 7 * 100);
     return `<div class="dash-habit-row">
@@ -595,14 +691,14 @@ function renderDashboard() {
     </div>`;
   }).join('');
 
-  /* -- exercise rows -- */
+  // ── Exercise activity rows (last 7 days) ────────────────────────────────────
+  // Extract each habit's values from last7Comps in one pass, then reuse that
+  // array for both the session count and the dot indicators — avoids a second loop.
   const exRows = HABITS.exercise.map(h => {
-    const entries = last7.map(d => (appState.completions[dk(d)]||{})[h.id]).filter(Boolean);
+    const vals     = last7Comps.map(c => c[h.id]);          // one pass: all 7 values
+    const entries  = vals.filter(Boolean);                   // sessions with a value
     const totalMin = entries.reduce((s, v) => s + parseInt(v), 0);
-    const dots = last7.map(d => {
-      const v = (appState.completions[dk(d)]||{})[h.id];
-      return `<div class="dash-ex-dot${v ? ' on' : ''}"></div>`;
-    }).join('');
+    const dots     = vals.map(v => `<div class="dash-ex-dot${v ? ' on' : ''}"></div>`).join('');
     return `<div class="dash-ex-row">
       <div>
         <span class="dash-ex-name">${h.name}</span>
@@ -612,21 +708,26 @@ function renderDashboard() {
     </div>`;
   }).join('');
 
-  /* -- running chart -- */
-  const runEntries = last7.map(d => {
-    const e = (appState.running||{})[dk(d)] || {};
-    return { d, dist: parseFloat(e.distance)||0, type: e.type||'' };
+  // ── Running chart (last 7 days) ─────────────────────────────────────────────
+  // Accumulate totalKm, outKm, and treadKm in a single map pass over the window
+  // instead of three separate filter+reduce calls (old code made 3 passes).
+  let totalKm = 0, outKm = 0, treadKm = 0;
+  const runEntries = last7.map((d, i) => {
+    const e    = running[last7Keys[i]] || {};
+    const dist = parseFloat(e.distance) || 0;
+    totalKm += dist;
+    if (e.type === 'outside')   outKm   += dist;
+    if (e.type === 'treadmill') treadKm += dist;
+    return { d, dist, type: e.type || '' };
   });
-  const totalKm  = runEntries.reduce((s, r) => s + r.dist, 0);
-  const outKm    = runEntries.filter(r => r.type==='outside').reduce((s,r) => s+r.dist, 0);
-  const treadKm  = runEntries.filter(r => r.type==='treadmill').reduce((s,r) => s+r.dist, 0);
-  const maxDist  = Math.max(...runEntries.map(r => r.dist), 0.1);
-  const outPct   = totalKm > 0 ? Math.round(outKm / totalKm * 100) : 0;
+  const maxDist  = Math.max(...runEntries.map(r => r.dist), 0.1); // floor at 0.1 avoids /0
+  const outPct   = totalKm > 0 ? Math.round(outKm   / totalKm * 100) : 0;
   const treadPct = totalKm > 0 ? 100 - outPct : 0;
 
+  // Bar height scaled proportionally to the tallest bar (max 62px).
   const runBars = runEntries.map(r => {
-    const barH = r.dist > 0 ? Math.max(6, Math.round(r.dist / maxDist * 62)) : 0;
-    const color = r.type==='outside' ? '#0369a1' : r.type==='treadmill' ? '#7c3aed' : '#cbd5e1';
+    const barH  = r.dist > 0 ? Math.max(6, Math.round(r.dist / maxDist * 62)) : 0;
+    const color = r.type === 'outside' ? '#0369a1' : r.type === 'treadmill' ? '#7c3aed' : '#cbd5e1';
     return `<div class="dash-run-col">
       <span class="dash-run-lbl">${r.dist > 0 ? r.dist : ''}</span>
       <div class="dash-run-bar" style="height:${barH}px;background:${barH ? color : 'transparent'}"></div>
@@ -688,8 +789,13 @@ function renderDashboard() {
     </div>`;
 }
 
-/* -- running tab --------------------------------------- */
+// ─── Running Tab ─────────────────────────────────────────────────────────────
 
+// Builds the running log table for the current 7-day window.
+// The distance cell has two render states: a read-only display and an active
+// <input> (when editingRunDate matches this row's key). Toggling between them
+// is controlled by the editingRunDate variable rather than separate DOM elements,
+// so we only ever have one live input in the document at a time.
 function renderRunning(dates, todayDk) {
   const running = appState.running || {};
   let rows = '';
@@ -699,6 +805,8 @@ function renderRunning(dates, todayDk) {
     const isToday = key === todayDk;
     const editing = editingRunDate === key;
 
+    // When editing: render an <input> pre-filled with the stored distance.
+    // onblur saves on focus-loss; Enter saves; Escape cancels without saving.
     const distCell = editing
       ? `<td class="run-dist-cell editing">
            <input class="run-dist-input" id="run-dist-${key}"
@@ -714,6 +822,7 @@ function renderRunning(dates, todayDk) {
              : `<span class="run-dist-empty">&#x2014;</span>`}
          </td>`;
 
+    // Run type cycles: (none) → outside → treadmill → (none).
     const type      = entry.type || '';
     const typeCls   = type === 'outside' ? 'run-type-outside' : type === 'treadmill' ? 'run-type-treadmill' : '';
     const typeLabel = type === 'outside' ? 'Outside' : type === 'treadmill' ? 'Treadmill' : '&#x2014;';
@@ -740,30 +849,38 @@ function renderRunning(dates, todayDk) {
   </div>`;
 }
 
+// Sets the row for dateKey into edit mode and re-renders.
+// After render(), the new <input> element is focused in the render() caller.
 function startEditDist(dateKey) {
   editingRunDate = dateKey;
   render();
 }
 
+// Reads the input value, writes it to appState, and exits edit mode.
+// Deletes the entire date entry if both distance and type are now absent,
+// keeping appState.running compact with no empty stub objects.
 function saveRunDist(dateKey) {
   const inp = document.getElementById('run-dist-' + dateKey);
   if (!inp) return;
   const val = inp.value.trim();
-  if (!appState.running) appState.running = {};
+  if (!appState.running)          appState.running          = {};
   if (!appState.running[dateKey]) appState.running[dateKey] = {};
   if (val) appState.running[dateKey].distance = val;
   else     delete appState.running[dateKey].distance;
+  // Prune the date key entirely if no fields remain.
   if (!Object.keys(appState.running[dateKey]).length) delete appState.running[dateKey];
   editingRunDate = null;
   save(); render();
 }
 
+// Cycles the run type for a date: (none) → outside → treadmill → (none).
+// Prunes the date entry if it becomes empty after removing the type field.
 function toggleRunType(dateKey) {
-  if (!appState.running) appState.running = {};
+  if (!appState.running)          appState.running          = {};
   if (!appState.running[dateKey]) appState.running[dateKey] = {};
   const cur = appState.running[dateKey].type || '';
-  if      (!cur)               appState.running[dateKey].type = 'outside';
-  else if (cur === 'outside')  appState.running[dateKey].type = 'treadmill';
+  if      (!cur)              appState.running[dateKey].type = 'outside';
+  else if (cur === 'outside') appState.running[dateKey].type = 'treadmill';
   else {
     delete appState.running[dateKey].type;
     if (!Object.keys(appState.running[dateKey]).length) delete appState.running[dateKey];
@@ -771,18 +888,30 @@ function toggleRunType(dateKey) {
   save(); render();
 }
 
-/* -- boat tab ------------------------------------------ */
+// ─── Boat Tab ─────────────────────────────────────────────────────────────────
 
+// Renders two sections:
+//   1. Maintenance Log — one row per BOAT_TASKS entry showing last-done date,
+//      days elapsed, a date picker, and a "Done Today" shortcut button.
+//   2. To Dos — a free-form table of tasks with urgency, status, and next-steps.
+//
+// All user-supplied strings (task names, todo text) are passed through esc() to
+// prevent XSS before being written into innerHTML.
 function renderBoat() {
   const today   = new Date();
   const todayDk = dk(today);
   const maint   = appState.boatMaintenance || {};
 
+  // ── Maintenance rows ────────────────────────────────────────────────────────
+  // 'T00:00:00' is appended so the Date constructor parses the stored YYYY-MM-DD
+  // string in local time rather than UTC, avoiding an off-by-one day on many
+  // systems where UTC midnight rolls over to the previous local date.
+  const MS_PER_DAY = 86400000;
   const maintRows = BOAT_TASKS.map(task => {
     const lastDate = maint[task] || '';
     let daysAgo = '&#x2014;';
     if (lastDate) {
-      const diff = Math.round((today - new Date(lastDate + 'T00:00:00')) / 86400000);
+      const diff = Math.round((today - new Date(lastDate + 'T00:00:00')) / MS_PER_DAY);
       daysAgo = diff === 0 ? 'Today' : diff === 1 ? '1 day ago' : `${diff} days ago`;
     }
     return `<tr>
@@ -799,13 +928,18 @@ function renderBoat() {
     </tr>`;
   }).join('');
 
-  const todos = appState.boatTodos || [];
+  // ── To-do rows ──────────────────────────────────────────────────────────────
+  // Each todo is stored as { task, urgency, status, nextSteps } in appState.boatTodos[].
+  // Dropdowns use the array index (i) to target the correct entry in updateTodo().
+  // onchange (not oninput) fires on blur/selection, so save() is called once per
+  // edit rather than on every keystroke.
+  const todos           = appState.boatTodos || [];
   const URGENCY_OPTIONS = ['High', 'Med', 'Low'];
   const STATUS_OPTIONS  = ['To Do', 'In Progress', 'Done'];
 
   const todoRows = todos.map((todo, i) => {
-    const urgSel  = URGENCY_OPTIONS.map(u => `<option value="${u}"${todo.urgency===u?' selected':''}>${u}</option>`).join('');
-    const statSel = STATUS_OPTIONS.map(s  => `<option value="${s}"${todo.status===s?' selected':''}>${s}</option>`).join('');
+    const urgSel  = URGENCY_OPTIONS.map(u => `<option value="${u}"${todo.urgency === u ? ' selected' : ''}>${u}</option>`).join('');
+    const statSel = STATUS_OPTIONS.map(s  => `<option value="${s}"${todo.status  === s ? ' selected' : ''}>${s}</option>`).join('');
     return `<tr>
       <td class="boat-todo-td"><input class="boat-todo-inp" value="${esc(todo.task||'')}" placeholder="Task..." onchange="updateTodo(${i},'task',this.value)" /></td>
       <td class="boat-todo-td"><select class="boat-todo-inp" onchange="updateTodo(${i},'urgency',this.value)" style="cursor:pointer">${urgSel}</select></td>
@@ -850,59 +984,77 @@ function renderBoat() {
     </div>`;
 }
 
+// Writes the last-performed date for a maintenance task to appState.
+// Called by both the date picker (onchange) and the "Done Today" button.
 function setMaintenanceDate(task, date) {
   if (!appState.boatMaintenance) appState.boatMaintenance = {};
   if (date) appState.boatMaintenance[task] = date;
-  else delete appState.boatMaintenance[task];
+  else      delete appState.boatMaintenance[task];
   save(); render();
 }
 
+// Appends a blank to-do row with sensible defaults and re-renders.
 function addTodo() {
   if (!appState.boatTodos) appState.boatTodos = [];
   appState.boatTodos.push({ task: '', urgency: 'Med', status: 'To Do', nextSteps: '' });
   save(); render();
 }
 
+// Patches a single field on a single to-do entry without re-rendering.
+// Skipping render() here preserves focus on the input/select that triggered the change.
 function updateTodo(i, field, value) {
   if (!appState.boatTodos || !appState.boatTodos[i]) return;
   appState.boatTodos[i][field] = value;
   save();
 }
 
+// Removes a to-do by index using splice() (mutates the array in place) and re-renders.
 function deleteTodo(i) {
   if (!appState.boatTodos) return;
   appState.boatTodos.splice(i, 1);
   save(); render();
 }
 
-/* -- render -------------------------------------------- */
+// ─── Main Render ──────────────────────────────────────────────────────────────
+// Central rendering function called after every state mutation. Rather than
+// using a virtual DOM, it replaces the innerHTML of #view-content wholesale.
+// This is fast enough for this data size and keeps the codebase simple.
+//
+// Render order:
+//   1. Capture current scroll position (restores it after innerHTML swap)
+//   2. Sync tab button active states
+//   3. Route to the correct tab renderer
+//   4. For grid tabs (daily/exercise): build thead + tbody strings, then inject
 
 function render() {
-  // Save scroll position before re-rendering
-  const prevWrap   = document.querySelector('.grid-wrap');
+  // Capture horizontal scroll before replacing innerHTML, which destroys the
+  // current .grid-wrap element and resets scrollLeft to 0.
+  const prevWrap    = document.querySelector('.grid-wrap');
   const savedScroll = prevWrap ? prevWrap.scrollLeft : 0;
 
-  const dates   = windowDates();
-  const habits  = HABITS[activeTab];
-  const todayDk = dk(new Date());
+  const dates   = windowDates();          // 7 Date objects for the current window
+  const habits  = HABITS[activeTab];      // null for dashy/running/boat tabs
+  const todayDk = dk(new Date());         // 'YYYY-MM-DD' key for today
 
-  // Update tab active states
+  // Sync the active CSS class on all tab buttons.
+  // TAB_ORDER index corresponds to DOM order of .tab elements.
   document.querySelectorAll('.tab').forEach((el, i) => {
     el.classList.toggle('active', TAB_ORDER[i] === activeTab);
   });
 
-  // Range label
+  // Build the "Apr 7 – 13, 2026" range label for the navigation row.
+  // Cross-month windows (e.g. "Mar 30 – Apr 5") show both month names.
   const first = dates[0], last = dates[6];
-  const rangeLabel = (first.getMonth() === last.getMonth())
+  const rangeLabel = first.getMonth() === last.getMonth()
     ? `${MONTHS[first.getMonth()]} ${first.getDate()} &ndash; ${last.getDate()}, ${YEAR}`
     : `${MONTHS[first.getMonth()]} ${first.getDate()} &ndash; ${MONTHS[last.getMonth()]} ${last.getDate()}, ${YEAR}`;
 
-  // Navigation bounds
+  // Disable Prev/Next buttons at the year boundaries using the cached YEAR_MAX_START.
   const canPrev = winStart > YEAR_START;
-  const maxStart = new Date(YEAR_END);
-  maxStart.setDate(maxStart.getDate() - 6);
-  const canNext = winStart < maxStart;
+  const canNext = winStart < YEAR_MAX_START;
 
+  // Restores the horizontal scroll position after innerHTML replacement.
+  // Defined here so it closes over savedScroll without needing a parameter.
   function restoreScroll() {
     if (savedScroll > 0) {
       const gw = document.querySelector('.grid-wrap');
@@ -910,9 +1062,10 @@ function render() {
     }
   }
 
+  // ── Tab routing ─────────────────────────────────────────────────────────────
   if (activeTab === 'dashy') {
     document.getElementById('view-content').innerHTML = renderDashboard();
-    return;
+    return; // no nav row or scroll needed for the dashboard
   }
 
   if (activeTab === 'boat') {
@@ -929,6 +1082,7 @@ function render() {
       </div>
       ${renderRunning(dates, todayDk)}`;
     restoreScroll();
+    // Re-focus the active distance input after re-render (innerHTML wipes focus state).
     if (editingRunDate) {
       const inp = document.getElementById('run-dist-' + editingRunDate);
       if (inp) { inp.focus(); inp.select(); }
@@ -936,12 +1090,16 @@ function render() {
     return;
   }
 
-  // Build grid HTML
-  let thead = `<tr>
-    <th class="habit-label-col"></th>`;
+  // ── Habit grid (daily / exercise tabs) ──────────────────────────────────────
+  // Pre-compute all 7 date-key strings once. Without this, dk(d) would be called
+  // once per header column + once per cell = 7 + (7 × n_habits) times.
+  // With the pre-computed array it is called exactly 7 times total.
+  const dateKeys = dates.map(dk);
 
-  dates.forEach(d => {
-    const isToday = dk(d) === todayDk;
+  // Build the <thead> row: one column for the habit label, then 7 date columns.
+  let thead = `<tr><th class="habit-label-col"></th>`;
+  dates.forEach((d, i) => {
+    const isToday = dateKeys[i] === todayDk;
     thead += `<th class="col-header${isToday ? ' today-col' : ''}">
       <span class="day-name">${DAY_ABBR[d.getDay()]}</span>
       <span class="day-num">${d.getDate()}</span>
@@ -950,11 +1108,12 @@ function render() {
   });
   thead += '</tr>';
 
+  // Build each habit row. Cell appearance depends on the stored value and habit type.
   let tbody = '';
   habits.forEach(h => {
     tbody += `<tr><td class="habit-label-col">${h.name}</td>`;
-    dates.forEach(d => {
-      const key     = dk(d);
+    dates.forEach((d, i) => {
+      const key     = dateKeys[i]; // reuse pre-computed key — no dk() call here
       const val     = appState.completions[key] && appState.completions[key][h.id];
       const isToday = key === todayDk;
       let cellCls, icon, iconStyle = '';
@@ -967,6 +1126,7 @@ function render() {
         icon      = val || '';
         iconStyle = ' style="font-size:13px"';
       } else {
+        // Boolean habit: yes (✓) / no (✗) / unset (blank)
         cellCls = val === 'yes' ? 'yes' : val === 'no' ? 'no' : 'unset';
         icon    = val === 'yes' ? '&#x2713;' : val === 'no' ? '&#x2717;' : '';
       }
@@ -998,35 +1158,39 @@ function render() {
   restoreScroll();
 }
 
+// ─── CSV Export / Import ──────────────────────────────────────────────────────
+
+// RFC-4180-compliant CSV row parser. Handles quoted fields, escaped quotes (""),
+// and fields that contain commas. Used instead of a simple split(',') because
+// habit names and values may legitimately contain commas.
 function parseCSVRow(line) {
   const cells = [];
   let cur = '', inQ = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '"') {
-      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQ = !inQ;
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; } // escaped quote ""
+      else inQ = !inQ;                                       // toggle quote mode
     } else if (ch === ',' && !inQ) {
       cells.push(cur); cur = '';
     } else {
       cur += ch;
     }
   }
-  cells.push(cur);
+  cells.push(cur); // push the final field (no trailing comma)
   return cells;
 }
 
+// Exports all completion data to a CSV file. Uses the pre-built ALL_HABITS
+// constant for column ordering so the spread isn't re-computed on every call.
+// Each cell value is double-quoted and internal quotes are escaped per RFC-4180.
 function exportCSV() {
-  const allHabits = [...HABITS.daily, ...HABITS.exercise];
   const dates = Object.keys(appState.completions).sort();
   if (!dates.length) { alert('No data to export.'); return; }
-  const header = ['Date', ...allHabits.map(h => h.name)];
-  const rows = dates.map(date => {
+  const header = ['Date', ...ALL_HABITS.map(h => h.name)];
+  const rows   = dates.map(date => {
     const day = appState.completions[date] || {};
-    return [date, ...allHabits.map(h => {
-      const v = day[h.id];
-      return v !== undefined ? v : '';
-    })];
+    return [date, ...ALL_HABITS.map(h => (day[h.id] !== undefined ? day[h.id] : ''))];
   });
   const csv = [header, ...rows]
     .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
@@ -1038,83 +1202,118 @@ function exportCSV() {
   URL.revokeObjectURL(a.href);
 }
 
+// Imports a CSV previously exported by exportCSV(). Builds a name→id lookup
+// from ALL_HABITS so header columns are matched by name rather than position,
+// making the import resilient to column reordering between app versions.
+// Unknown column names are silently skipped (colIds entry will be null).
 function importCSV(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = ev => {
     try {
-      const lines = ev.target.result.trim().split(/\r?\n/).filter(l => l.trim());
+      const lines  = ev.target.result.trim().split(/\r?\n/).filter(l => l.trim());
       if (lines.length < 2) throw new Error('No data rows found');
-      const headers = parseCSVRow(lines[0]);
+      const headers  = parseCSVRow(lines[0]);
       if (headers[0] !== 'Date') throw new Error('First column must be "Date"');
-      const allHabits = [...HABITS.daily, ...HABITS.exercise];
-      const nameToId = Object.fromEntries(allHabits.map(h => [h.name, h.id]));
-      const colIds = headers.slice(1).map(name => nameToId[name] || null);
+      // Pre-build a name→id map using the pre-computed ALL_HABITS constant.
+      const nameToId = Object.fromEntries(ALL_HABITS.map(h => [h.name, h.id]));
+      const colIds   = headers.slice(1).map(name => nameToId[name] || null);
       for (let i = 1; i < lines.length; i++) {
         const cells = parseCSVRow(lines[i]);
-        const date = cells[0];
-        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        const date  = cells[0];
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // skip malformed rows
         if (!appState.completions[date]) appState.completions[date] = {};
         cells.slice(1).forEach((val, idx) => {
           const id = colIds[idx];
           if (!id) return;
-          if (val === '') delete appState.completions[date][id];
-          else appState.completions[date][id] = val;
+          if (val === '') delete appState.completions[date][id]; // blank = remove entry
+          else            appState.completions[date][id] = val;
         });
+        // Prune empty date entries to keep appState compact.
         if (!Object.keys(appState.completions[date]).length) delete appState.completions[date];
       }
       save(); render();
     } catch(err) {
       alert('CSV import failed: ' + err.message);
     }
-    e.target.value = '';
+    e.target.value = ''; // reset so the same file can be re-selected if needed
   };
   reader.readAsText(file);
 }
 
-/* -- Google Drive --------------------------------------- */
+// ─── Google Drive Integration ─────────────────────────────────────────────────
+// Authentication uses Google Identity Services (GIS) OAuth 2.0 implicit flow:
+//   1. The GIS <script> tag loads asynchronously; onload calls onGsiLoaded().
+//   2. onGsiLoaded() requests a token silently (prompt:'') — no popup if the
+//      user has previously authorised this app in the same browser session.
+//   3. The token callback stores the access token in driveToken and triggers
+//      the initial Drive load. Tokens expire after ~1 hour; requireToken()
+//      handles re-acquiring one transparently before any Drive operation.
+//
+// Data flow:
+//   Open app  → load localStorage → request token → loadFromDrive (replaces state)
+//   Edit data → save localStorage immediately
+//   Switch app (visibilitychange hidden) → saveToDrive (quiet)
+//   Return to app (visibilitychange visible) → loadFromDrive (quiet, picks up
+//                  changes made on another device)
+//   Close tab → beforeunload fetch with keepalive: true (best-effort final save)
 
-let driveToken      = null;
-let tokenClient     = null;
-let autoLoadOnStart = false;
+// Runtime Drive state — not persisted beyond the current page session.
+let driveToken      = null;  // OAuth 2.0 bearer token; null when signed out / expired
+let tokenClient     = null;  // GIS TokenClient instance, reused across calls
+let autoLoadOnStart = false; // flag to trigger loadFromDrive after the first token grant
+
+// Persisted Drive configuration — survives page refresh via localStorage.
 const DEFAULT_CLIENT_ID = '983017318004-stq94jbt582aqhe7ts17kqg1k56kr32g.apps.googleusercontent.com';
 let driveClientId = localStorage.getItem('gdrive-client-id') || DEFAULT_CLIENT_ID;
 let driveFolderId = localStorage.getItem('gdrive-folder-id') || '';
-let driveFileId   = localStorage.getItem('gdrive-file-id')   || '';
+let driveFileId   = localStorage.getItem('gdrive-file-id')   || ''; // cached file id avoids a search on every save
 
+// Updates the small status dot in the header to green (connected) or grey (signed out).
 function updateDriveDot() {
   const dot = document.getElementById('drive-dot');
   if (dot) dot.className = 'drive-status' + (driveToken ? ' connected' : '');
 }
 
+// Creates (or recreates) the GIS TokenClient with the current client ID.
+// Must be called again if the client ID changes in settings.
 function initTokenClient() {
   if (!driveClientId || typeof google === 'undefined') return;
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: driveClientId,
-    scope: 'https://www.googleapis.com/auth/drive',
+    scope: 'https://www.googleapis.com/auth/drive', // full Drive access required to read manually-uploaded files
     callback: resp => {
       if (resp.error) { showToast('Sign-in failed: ' + resp.error, true); return; }
       driveToken = resp.access_token;
       updateDriveDot();
+      // On the very first token grant at startup, immediately load Drive data.
       if (autoLoadOnStart) { autoLoadOnStart = false; loadFromDrive(); }
       else showToast('Signed in to Google ✓');
     }
   });
 }
 
+// Called by the GIS <script> onload attribute once the Google API is ready.
+// Attempts a silent token request (no popup) so the app syncs automatically
+// without requiring the user to click a sign-in button.
 function onGsiLoaded() {
   if (!driveClientId) return;
   autoLoadOnStart = true;
   initTokenClient();
-  tokenClient.requestAccessToken({ prompt: '' });
+  tokenClient.requestAccessToken({ prompt: '' }); // '' = silent; '' triggers popup if needed
 }
 
+// Higher-order helper that ensures a valid token exists before running a Drive
+// operation. If the token is present, calls `then()` immediately. If not, it
+// attempts a silent re-auth (prompt:'') — which succeeds when the browser still
+// has an active Google session — then calls `then()` from the callback.
+// Uses driveClientId (not driveToken) as the guard so it tries even after expiry.
 function requireToken(then) {
   if (driveToken) { then(); return; }
   if (!driveClientId) { openDriveModal(); return; }
   if (!tokenClient) initTokenClient();
-  if (!tokenClient) { showToast('Google API not loaded yet � try again shortly', true); return; }
+  if (!tokenClient) { showToast('Google API not loaded yet — try again shortly', true); return; }
   tokenClient.callback = resp => {
     if (resp.error) { showToast('Sign-in failed: ' + resp.error, true); return; }
     driveToken = resp.access_token;
@@ -1124,16 +1323,24 @@ function requireToken(then) {
   tokenClient.requestAccessToken({ prompt: '' });
 }
 
+// Thin fetch wrapper that injects the Authorization header and normalises errors.
+// A 401 response means the token expired mid-session; it clears driveToken so the
+// next requireToken() call will re-authenticate before retrying.
 async function driveRequest(url, options = {}) {
   const resp = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${driveToken}`, ...(options.headers || {}) }
   });
-  if (resp.status === 401) { driveToken = null; updateDriveDot(); const e = new Error('Token expired'); e.status = 401; throw e; }
+  if (resp.status === 401) {
+    driveToken = null; updateDriveDot();
+    const e = new Error('Token expired'); e.status = 401; throw e;
+  }
   if (!resp.ok) { const e = new Error(await resp.text()); e.status = resp.status; throw e; }
   return resp.json();
 }
 
+// Creates a new JSON file in Drive using the multipart upload endpoint, which
+// sends metadata (name, MIME type, optional parent folder) and content in one request.
 async function createDriveFile(name, content) {
   const meta = { name, mimeType: 'application/json' };
   if (driveFolderId) meta.parents = [driveFolderId];
@@ -1146,6 +1353,9 @@ async function createDriveFile(name, content) {
   );
 }
 
+// Updates the content of an existing Drive file using a simple media upload (PATCH).
+// More efficient than multipart for updates because only the body is sent,
+// not the metadata.
 async function patchDriveFile(fileId, content) {
   return driveRequest(
     `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
@@ -1153,6 +1363,9 @@ async function patchDriveFile(fileId, content) {
   );
 }
 
+// Searches Drive for a file by name (and optionally by folder). Returns an array
+// of matching file objects with id and name fields. Used as a fallback when the
+// cached driveFileId is missing or stale.
 async function searchDriveFiles(name) {
   let q = `name='${name}' and trashed=false`;
   if (driveFolderId) q += ` and '${driveFolderId}' in parents`;
@@ -1162,20 +1375,30 @@ async function searchDriveFiles(name) {
   return data.files || [];
 }
 
+// Downloads the raw content of a Drive file by id. Uses alt=media to get the
+// file body directly rather than the file metadata JSON.
 async function readDriveFile(fileId) {
   const resp = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
     { headers: { Authorization: `Bearer ${driveToken}` } }
   );
-  if (resp.status === 401) { driveToken = null; updateDriveDot(); const e = new Error('Token expired'); e.status = 401; throw e; }
+  if (resp.status === 401) {
+    driveToken = null; updateDriveDot();
+    const e = new Error('Token expired'); e.status = 401; throw e;
+  }
   if (!resp.ok) { const e = new Error(await resp.text()); e.status = resp.status; throw e; }
   return resp.json();
 }
 
+// Serialises appState to Drive. If driveFileId is cached, PATCHes in place.
+// If not (first save or file was deleted), searches by name before creating new.
+// quiet=true suppresses the success toast for background auto-saves.
+// retry=true allows one automatic re-auth attempt on a 401 before giving up.
 async function saveToDrive(quiet = false, retry = true) {
   requireToken(async () => {
     try {
       const content = JSON.stringify(appState, null, 2);
+      // Resolve the file id if we don't have a cached one.
       if (!driveFileId) {
         const files = await searchDriveFiles('habit-tracker-data.json');
         if (files.length) {
@@ -1186,6 +1409,7 @@ async function saveToDrive(quiet = false, retry = true) {
       if (driveFileId) {
         await patchDriveFile(driveFileId, content);
       } else {
+        // File doesn't exist yet — create it and cache the new id.
         const file = await createDriveFile('habit-tracker-data.json', content);
         driveFileId = file.id;
         localStorage.setItem('gdrive-file-id', driveFileId);
@@ -1194,6 +1418,7 @@ async function saveToDrive(quiet = false, retry = true) {
     } catch(e) {
       if (e.status === 401 && retry) { driveToken = null; saveToDrive(quiet, false); return; }
       if (e.status === 404) {
+        // Cached id is stale — clear it and retry (will search or create anew).
         driveFileId = ''; localStorage.removeItem('gdrive-file-id');
         saveToDrive(quiet, retry); return;
       }
@@ -1202,6 +1427,10 @@ async function saveToDrive(quiet = false, retry = true) {
   });
 }
 
+// Downloads and applies the latest Drive data. Merges defensive defaults for
+// any appState keys added in newer app versions that an older saved file won't have.
+// quiet=true suppresses the success toast (used for background foreground-reloads).
+// Errors are always shown even in quiet mode so the user knows if sync is broken.
 async function loadFromDrive(retry = true, quiet = false) {
   requireToken(async () => {
     try {
@@ -1216,25 +1445,32 @@ async function loadFromDrive(retry = true, quiet = false) {
       const data = await readDriveFile(fileId);
       if (!data.completions) throw new Error('Unrecognised file format');
       appState = data;
-      if (!appState.running) appState.running = {};
+      // Defensive defaults: guard against older saved files missing newer keys.
+      if (!appState.running)         appState.running         = {};
       if (!appState.boatMaintenance) appState.boatMaintenance = {};
-      if (!appState.boatTodos) appState.boatTodos = [];
+      if (!appState.boatTodos)       appState.boatTodos       = [];
       save(); render();
       if (!quiet) showToast('Loaded from Google Drive ✓');
     } catch(e) {
       if (e.status === 401 && retry) { driveToken = null; loadFromDrive(false, quiet); return; }
       if (e.status === 404) {
+        // Cached id is stale — search by name before giving up.
         driveFileId = ''; localStorage.removeItem('gdrive-file-id');
         const found = await searchDriveFiles('habit-tracker-data.json');
-        if (found.length) { driveFileId = found[0].id; localStorage.setItem('gdrive-file-id', driveFileId); loadFromDrive(false, quiet); return; }
+        if (found.length) {
+          driveFileId = found[0].id;
+          localStorage.setItem('gdrive-file-id', driveFileId);
+          loadFromDrive(false, quiet); return;
+        }
         if (!quiet) showToast('No Drive data found — starting fresh'); return;
       }
-      // Always show errors so the user knows sync failed, even in quiet/background mode
+      // Always surface errors so the user knows sync is broken, even in quiet mode.
       showToast('Drive sync failed: ' + e.message, true);
     }
   });
 }
 
+// Drive settings modal helpers — open/close and persist updated credentials.
 function openDriveModal() {
   document.getElementById('drive-client-id-inp').value = driveClientId;
   document.getElementById('drive-folder-id-inp').value = driveFolderId;
@@ -1248,66 +1484,91 @@ function saveDriveSettings() {
   driveFolderId = document.getElementById('drive-folder-id-inp').value.trim();
   localStorage.setItem('gdrive-client-id', driveClientId);
   localStorage.setItem('gdrive-folder-id', driveFolderId);
-  driveToken = null; tokenClient = null;
+  driveToken = null; tokenClient = null; // reset auth state for the new client id
   updateDriveDot();
   closeDriveModal();
   if (driveClientId) initTokenClient();
 }
 
+// Displays a transient notification banner at the bottom of the screen.
+// isError=true renders a red background; default is green for success messages.
+// Clears any in-flight timer so rapid calls don't stack up overlapping toasts.
 function showToast(msg, isError = false) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  t.textContent      = msg;
   t.style.background = isError ? '#b91c1c' : '#15803d';
   t.classList.add('show');
   clearTimeout(t._timer);
   t._timer = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// Auto-save on hide, auto-reload on show
+// ─── Lifecycle Event Listeners ────────────────────────────────────────────────
+
+// Cross-device sync strategy:
+//   hidden  → save immediately so any other device gets the latest data
+//   visible → reload silently so this device gets changes made elsewhere
+// driveClientId (not driveToken) is used as the guard for the reload so we attempt
+// re-auth even if the token expired while the app was in the background.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden' && driveToken && driveFileId) saveToDrive(true);
-  // Reload whenever app comes to foreground — use driveClientId (not driveToken) so we
-  // still try even if the token expired; requireToken() will silently refresh it.
-  if (document.visibilityState === 'visible' && driveClientId) loadFromDrive(true, true);
+  if (document.visibilityState === 'hidden'  && driveToken && driveFileId) saveToDrive(true);
+  if (document.visibilityState === 'visible' && driveClientId)             loadFromDrive(true, true);
 });
 
-// Best-effort keepalive save on hard close
+// Last-resort save when the user closes the tab or navigates away.
+// keepalive: true tells the browser to complete the request even after the page
+// unloads — without it the fetch would be cancelled mid-flight.
+// This is intentionally fire-and-forget with no error handling.
 window.addEventListener('beforeunload', () => {
   if (!driveToken || !driveFileId) return;
   fetch(
     `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
     {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(appState, null, 2),
-      keepalive: true
+      method:    'PATCH',
+      headers:   { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+      body:      JSON.stringify(appState, null, 2),
+      keepalive: true // required for requests that outlive the page
     }
   );
 });
 
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
+// load() reads localStorage and renders immediately so the UI appears instantly.
+// Google Drive data arrives asynchronously via onGsiLoaded() → loadFromDrive()
+// and overwrites the local snapshot once the network response completes.
 load();
 
-// Swipe between tabs
+// ─── Swipe Navigation ─────────────────────────────────────────────────────────
+// Detects horizontal swipe gestures to navigate between tabs on touch devices.
+// Wrapped in an IIFE so x0, y0, and blocked are private to this handler and
+// don't pollute the global scope.
 (function () {
   let x0 = 0, y0 = 0, blocked = false;
   document.addEventListener('touchstart', e => {
     x0 = e.touches[0].clientX;
     y0 = e.touches[0].clientY;
-    // Block tab-swipe if touch starts inside a horizontally-scrollable grid
+    // Suppress tab-swipe when the touch starts inside a horizontally scrollable
+    // grid so the user can still scroll the date columns without changing tabs.
     blocked = !!e.target.closest('.grid-wrap');
-  }, { passive: true });
+  }, { passive: true }); // passive: true allows the browser to scroll without waiting for JS
+
   document.addEventListener('touchend', e => {
     if (blocked) return;
     const dx = e.changedTouches[0].clientX - x0;
     const dy = e.changedTouches[0].clientY - y0;
+    // Require at least 50px horizontal movement and a 1.5:1 horizontal:vertical
+    // ratio to distinguish a deliberate swipe from a diagonal scroll.
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
     const idx = TAB_ORDER.indexOf(activeTab);
-    if (dx < 0 && idx < TAB_ORDER.length - 1) switchTab(TAB_ORDER[idx + 1],  1);
-    if (dx > 0 && idx > 0)                    switchTab(TAB_ORDER[idx - 1], -1);
+    if (dx < 0 && idx < TAB_ORDER.length - 1) switchTab(TAB_ORDER[idx + 1],  1); // swipe left  → next tab
+    if (dx > 0 && idx > 0)                    switchTab(TAB_ORDER[idx - 1], -1); // swipe right → prev tab
   }, { passive: true });
 })();
 
-// Register service worker for PWA / offline support
+// ─── Service Worker (PWA / Offline Support) ───────────────────────────────────
+// Registers sw.js, which caches the app shell so the tracker loads instantly and
+// works offline. The SW uses a network-first strategy so live updates from GitHub
+// Pages are always picked up when online. The cache version in sw.js should be
+// bumped whenever the app shell files change to force clients to discard stale cache.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
