@@ -1,4 +1,4 @@
-const CACHE = 'dougs-tracker-v1';
+const CACHE = 'dougs-tracker-v2';
 const APP_SHELL = [
   '/habit-tracker/Habit-Tracker.html',
   '/habit-tracker/manifest.json',
