@@ -247,6 +247,35 @@
   /* -- Toast -------------------------------------------- */
   #toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(16px); padding: 9px 20px; border-radius: 20px; font-size: 13px; font-weight: 500; color: #fff; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 300; white-space: nowrap; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* -- Boat tab ----------------------------------------- */
+  .boat-section { margin-bottom: 1.75rem; }
+  .boat-section-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+  .boat-maint-table { width: 100%; border-collapse: collapse; }
+  .boat-maint-th { font-size: 11px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 16px; text-align: left; background: var(--bg-secondary); border-bottom: 0.5px solid var(--border-strong); white-space: nowrap; }
+  .boat-maint-td { padding: 10px 16px; border-bottom: 0.5px solid var(--border); vertical-align: middle; font-size: 14px; color: var(--text); white-space: nowrap; }
+  .boat-maint-task { font-weight: 500; min-width: 200px; white-space: normal; }
+  .boat-maint-days { font-size: 12px; color: var(--text-secondary); }
+  .boat-date-input { font-size: 13px; padding: 4px 8px; border: 0.5px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); outline: none; }
+  .boat-done-btn { padding: 5px 12px; font-size: 12px; border-radius: var(--radius-md); border: 0.5px solid var(--border-strong); background: var(--bg-secondary); color: var(--text); cursor: pointer; white-space: nowrap; }
+  .boat-done-btn:hover { background: var(--cell-yes-bg); color: var(--cell-yes-text); border-color: var(--cell-yes-text); }
+  .boat-todos-table { width: 100%; border-collapse: collapse; }
+  .boat-todo-th { font-size: 11px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 12px; text-align: left; background: var(--bg-secondary); border-bottom: 0.5px solid var(--border-strong); }
+  .boat-todo-td { padding: 8px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
+  .boat-todo-inp { width: 100%; font-size: 13px; padding: 4px 6px; border: 0.5px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--text); outline: none; font-family: inherit; }
+  .boat-todo-inp:hover, .boat-todo-inp:focus { border-color: var(--border-strong); background: var(--bg-secondary); }
+  .boat-del-btn { background: none; border: none; cursor: pointer; color: var(--text-tertiary); font-size: 16px; padding: 2px 6px; border-radius: var(--radius-md); }
+  .boat-del-btn:hover { background: var(--cell-no-bg); color: var(--cell-no-text); }
+  .boat-add-btn { margin-top: 10px; padding: 7px 16px; font-size: 13px; border-radius: var(--radius-md); border: 0.5px solid var(--border-strong); background: var(--bg-secondary); color: var(--text); cursor: pointer; }
+  .boat-add-btn:hover { background: var(--border); }
+  .urgency-high { background: #fee2e2; color: #b91c1c; border-radius: 10px; padding: 2px 8px; font-size: 11px; font-weight: 500; }
+  .urgency-med  { background: #fef9c3; color: #854d0e; border-radius: 10px; padding: 2px 8px; font-size: 11px; font-weight: 500; }
+  .urgency-low  { background: #dcfce7; color: #15803d; border-radius: 10px; padding: 2px 8px; font-size: 11px; font-weight: 500; }
+  @media (prefers-color-scheme: dark) {
+    .urgency-high { background: #450a0a; color: #f87171; }
+    .urgency-med  { background: #3b2500; color: #fcd34d; }
+    .urgency-low  { background: #14532d; color: #4ade80; }
+  }
 </style>
 </head>
 <body>
@@ -266,6 +295,7 @@
     <button class="tab" onclick="switchTab('daily')">Daily Habits</button>
     <button class="tab" onclick="switchTab('exercise')">Exercise</button>
     <button class="tab" onclick="switchTab('running')">Running</button>
+    <button class="tab" onclick="switchTab('boat')">Boat</button>
   </div>
 
   <div id="view-content"></div>
@@ -321,11 +351,24 @@ const DURATION_CYCLE = ['30', '60', '90', '120', '150', '180'];
 const COUNT_CYCLE = ['0', '1', '2', '3', '4', '5+'];
 const COUNT_CLASS = { '0': 'cnt-0', '1': 'cnt-1', '2': 'cnt-2', '3': 'cnt-3', '4': 'cnt-4', '5+': 'cnt-5p' };
 
+const BOAT_TASKS = [
+  'Run Engine',
+  'Fill Water Tank',
+  'Pump Out',
+  'Clean Fire',
+  'Fill Batteries w/ Deionized Water',
+  'Diesel Tank Bow Fill Up'
+];
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 const YEAR       = 2026;
 const YEAR_START = new Date(YEAR, 0, 1);   // Jan 1
 const YEAR_END   = new Date(YEAR, 11, 31); // Dec 31
 
-let appState       = { completions: {}, running: {} };
+let appState       = { completions: {}, running: {}, boatMaintenance: {}, boatTodos: [] };
 let activeTab      = 'dashy';
 let editingRunDate = null;
 let winStart   = defaultWindowStart();
@@ -367,6 +410,8 @@ function load() {
     const raw = localStorage.getItem('habit-tracker-v3');
     if (raw) appState = JSON.parse(raw);
     if (!appState.running) appState.running = {};
+    if (!appState.boatMaintenance) appState.boatMaintenance = {};
+    if (!appState.boatTodos) appState.boatTodos = [];
   } catch(e) {}
   render();
 }
@@ -412,7 +457,7 @@ function navigate(dir) {
   render();
 }
 
-const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running'];
+const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running', 'boat'];
 
 function switchTab(t, dir) {
   const el = document.getElementById('view-content');
@@ -726,16 +771,124 @@ function toggleRunType(dateKey) {
   save(); render();
 }
 
+/* -- boat tab ------------------------------------------ */
+
+function renderBoat() {
+  const today   = new Date();
+  const todayDk = dk(today);
+  const maint   = appState.boatMaintenance || {};
+
+  const maintRows = BOAT_TASKS.map(task => {
+    const lastDate = maint[task] || '';
+    let daysAgo = '&#x2014;';
+    if (lastDate) {
+      const diff = Math.round((today - new Date(lastDate + 'T00:00:00')) / 86400000);
+      daysAgo = diff === 0 ? 'Today' : diff === 1 ? '1 day ago' : `${diff} days ago`;
+    }
+    return `<tr>
+      <td class="boat-maint-td boat-maint-task">${esc(task)}</td>
+      <td class="boat-maint-td">
+        <input type="date" class="boat-date-input" value="${esc(lastDate)}"
+               max="${todayDk}"
+               onchange="setMaintenanceDate('${esc(task)}',this.value)" />
+      </td>
+      <td class="boat-maint-td boat-maint-days">${daysAgo}</td>
+      <td class="boat-maint-td">
+        <button class="boat-done-btn" onclick="setMaintenanceDate('${esc(task)}','${todayDk}')">Done Today</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const todos = appState.boatTodos || [];
+  const URGENCY_OPTIONS = ['High', 'Med', 'Low'];
+  const STATUS_OPTIONS  = ['To Do', 'In Progress', 'Done'];
+
+  const todoRows = todos.map((todo, i) => {
+    const urgSel  = URGENCY_OPTIONS.map(u => `<option value="${u}"${todo.urgency===u?' selected':''}>${u}</option>`).join('');
+    const statSel = STATUS_OPTIONS.map(s  => `<option value="${s}"${todo.status===s?' selected':''}>${s}</option>`).join('');
+    return `<tr>
+      <td class="boat-todo-td"><input class="boat-todo-inp" value="${esc(todo.task||'')}" placeholder="Task..." onchange="updateTodo(${i},'task',this.value)" /></td>
+      <td class="boat-todo-td"><select class="boat-todo-inp" onchange="updateTodo(${i},'urgency',this.value)" style="cursor:pointer">${urgSel}</select></td>
+      <td class="boat-todo-td"><select class="boat-todo-inp" onchange="updateTodo(${i},'status',this.value)" style="cursor:pointer">${statSel}</select></td>
+      <td class="boat-todo-td"><input class="boat-todo-inp" value="${esc(todo.nextSteps||'')}" placeholder="Next steps..." onchange="updateTodo(${i},'nextSteps',this.value)" /></td>
+      <td class="boat-todo-td" style="text-align:center"><button class="boat-del-btn" onclick="deleteTodo(${i})" title="Delete">&#x2717;</button></td>
+    </tr>`;
+  }).join('');
+
+  const emptyTodos = `<tr><td class="boat-todo-td" colspan="5" style="color:var(--text-tertiary);font-size:13px;text-align:center;padding:16px">No to-dos yet &#x2014; add one below</td></tr>`;
+
+  return `
+    <div class="boat-section">
+      <div class="boat-section-title">Maintenance Log</div>
+      <div class="grid-wrap">
+        <table class="boat-maint-table">
+          <thead><tr>
+            <th class="boat-maint-th">Task</th>
+            <th class="boat-maint-th">Last Done</th>
+            <th class="boat-maint-th">Days Since</th>
+            <th class="boat-maint-th"></th>
+          </tr></thead>
+          <tbody>${maintRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="boat-section">
+      <div class="boat-section-title">To Dos</div>
+      <div class="grid-wrap">
+        <table class="boat-todos-table">
+          <thead><tr>
+            <th class="boat-todo-th" style="min-width:160px">Task</th>
+            <th class="boat-todo-th" style="min-width:90px">Urgency</th>
+            <th class="boat-todo-th" style="min-width:110px">Status</th>
+            <th class="boat-todo-th" style="min-width:160px">Next Steps</th>
+            <th class="boat-todo-th" style="width:44px"></th>
+          </tr></thead>
+          <tbody>${todoRows || emptyTodos}</tbody>
+        </table>
+      </div>
+      <button class="boat-add-btn" onclick="addTodo()">+ Add To-Do</button>
+    </div>`;
+}
+
+function setMaintenanceDate(task, date) {
+  if (!appState.boatMaintenance) appState.boatMaintenance = {};
+  if (date) appState.boatMaintenance[task] = date;
+  else delete appState.boatMaintenance[task];
+  save(); render();
+}
+
+function addTodo() {
+  if (!appState.boatTodos) appState.boatTodos = [];
+  appState.boatTodos.push({ task: '', urgency: 'Med', status: 'To Do', nextSteps: '' });
+  save(); render();
+}
+
+function updateTodo(i, field, value) {
+  if (!appState.boatTodos || !appState.boatTodos[i]) return;
+  appState.boatTodos[i][field] = value;
+  save();
+}
+
+function deleteTodo(i) {
+  if (!appState.boatTodos) return;
+  appState.boatTodos.splice(i, 1);
+  save(); render();
+}
+
 /* -- render -------------------------------------------- */
 
 function render() {
+  // Save scroll position before re-rendering
+  const prevWrap   = document.querySelector('.grid-wrap');
+  const savedScroll = prevWrap ? prevWrap.scrollLeft : 0;
+
   const dates   = windowDates();
   const habits  = HABITS[activeTab];
   const todayDk = dk(new Date());
 
   // Update tab active states
   document.querySelectorAll('.tab').forEach((el, i) => {
-    el.classList.toggle('active', ['dashy', 'daily', 'exercise', 'running'][i] === activeTab);
+    el.classList.toggle('active', TAB_ORDER[i] === activeTab);
   });
 
   // Range label
@@ -750,8 +903,20 @@ function render() {
   maxStart.setDate(maxStart.getDate() - 6);
   const canNext = winStart < maxStart;
 
+  function restoreScroll() {
+    if (savedScroll > 0) {
+      const gw = document.querySelector('.grid-wrap');
+      if (gw) gw.scrollLeft = savedScroll;
+    }
+  }
+
   if (activeTab === 'dashy') {
     document.getElementById('view-content').innerHTML = renderDashboard();
+    return;
+  }
+
+  if (activeTab === 'boat') {
+    document.getElementById('view-content').innerHTML = renderBoat();
     return;
   }
 
@@ -763,6 +928,7 @@ function render() {
         <button class="nav-btn" onclick="navigate(1)" ${canNext ? '' : 'disabled'}>Next &#x2192;</button>
       </div>
       ${renderRunning(dates, todayDk)}`;
+    restoreScroll();
     if (editingRunDate) {
       const inp = document.getElementById('run-dist-' + editingRunDate);
       if (inp) { inp.focus(); inp.select(); }
@@ -829,6 +995,7 @@ function render() {
       <div class="legend-item"><div class="legend-dot no"></div> No</div>
       <div class="legend-item"><div class="legend-dot unset"></div> Not set</div>
     </div>`;
+  restoreScroll();
 }
 
 function parseCSVRow(line) {
@@ -1035,13 +1202,13 @@ async function saveToDrive(quiet = false, retry = true) {
   });
 }
 
-async function loadFromDrive(retry = true) {
+async function loadFromDrive(retry = true, quiet = false) {
   requireToken(async () => {
     try {
       let fileId = driveFileId;
       if (!fileId) {
         const files = await searchDriveFiles('habit-tracker-data.json');
-        if (!files.length) { showToast('No Drive data found — starting fresh'); return; }
+        if (!files.length) { if (!quiet) showToast('No Drive data found — starting fresh'); return; }
         fileId = files[0].id;
         driveFileId = fileId;
         localStorage.setItem('gdrive-file-id', fileId);
@@ -1050,17 +1217,19 @@ async function loadFromDrive(retry = true) {
       if (!data.completions) throw new Error('Unrecognised file format');
       appState = data;
       if (!appState.running) appState.running = {};
+      if (!appState.boatMaintenance) appState.boatMaintenance = {};
+      if (!appState.boatTodos) appState.boatTodos = [];
       save(); render();
-      showToast('Loaded from Google Drive ✓');
+      if (!quiet) showToast('Loaded from Google Drive ✓');
     } catch(e) {
-      if (e.status === 401 && retry) { driveToken = null; loadFromDrive(false); return; }
+      if (e.status === 401 && retry) { driveToken = null; loadFromDrive(false, quiet); return; }
       if (e.status === 404) {
         driveFileId = ''; localStorage.removeItem('gdrive-file-id');
         const found = await searchDriveFiles('habit-tracker-data.json');
-        if (found.length) { driveFileId = found[0].id; localStorage.setItem('gdrive-file-id', driveFileId); loadFromDrive(false); return; }
-        showToast('No Drive data found — starting fresh'); return;
+        if (found.length) { driveFileId = found[0].id; localStorage.setItem('gdrive-file-id', driveFileId); loadFromDrive(false, quiet); return; }
+        if (!quiet) showToast('No Drive data found — starting fresh'); return;
       }
-      showToast('Load failed: ' + e.message, true);
+      if (!quiet) showToast('Load failed: ' + e.message, true);
     }
   });
 }
@@ -1093,9 +1262,10 @@ function showToast(msg, isError = false) {
   t._timer = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// Auto-save when user switches away or closes the tab
+// Auto-save on hide, auto-reload on show
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && driveToken && driveFileId) saveToDrive(true);
+  if (document.visibilityState === 'visible' && driveToken) loadFromDrive(true, true);
 });
 
 // Best-effort keepalive save on hard close
