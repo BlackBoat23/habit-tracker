@@ -1229,7 +1229,8 @@ async function loadFromDrive(retry = true, quiet = false) {
         if (found.length) { driveFileId = found[0].id; localStorage.setItem('gdrive-file-id', driveFileId); loadFromDrive(false, quiet); return; }
         if (!quiet) showToast('No Drive data found — starting fresh'); return;
       }
-      if (!quiet) showToast('Load failed: ' + e.message, true);
+      // Always show errors so the user knows sync failed, even in quiet/background mode
+      showToast('Drive sync failed: ' + e.message, true);
     }
   });
 }
@@ -1265,7 +1266,9 @@ function showToast(msg, isError = false) {
 // Auto-save on hide, auto-reload on show
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && driveToken && driveFileId) saveToDrive(true);
-  if (document.visibilityState === 'visible' && driveToken) loadFromDrive(true, true);
+  // Reload whenever app comes to foreground — use driveClientId (not driveToken) so we
+  // still try even if the token expired; requireToken() will silently refresh it.
+  if (document.visibilityState === 'visible' && driveClientId) loadFromDrive(true, true);
 });
 
 // Best-effort keepalive save on hard close
