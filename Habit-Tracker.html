@@ -248,6 +248,22 @@
   #toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(16px); padding: 9px 20px; border-radius: 20px; font-size: 13px; font-weight: 500; color: #fff; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 300; white-space: nowrap; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+  /* -- Running pace indicator --------------------------- */
+  /* Wraps the progress bar and allows the pace marker line to overflow vertically */
+  .pace-track { position: relative; height: 12px; background: var(--bg); border-radius: 6px; border: 0.5px solid var(--border); margin-bottom: 14px; overflow: visible; }
+  .pace-fill  { height: 100%; border-radius: 6px; transition: width 0.4s; }
+  /* Vertical pace-marker line with a small triangle label above it */
+  .pace-marker { position: absolute; top: -6px; bottom: -6px; width: 2px; border-radius: 1px; background: var(--text-secondary); transform: translateX(-50%); z-index: 1; }
+  .pace-marker-label { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-size: 9px; color: var(--text-secondary); white-space: nowrap; font-weight: 500; }
+  /* Ahead / behind status badge */
+  .pace-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .pace-badge.ahead  { background: #dcfce7; color: #15803d; }
+  .pace-badge.behind { background: #fee2e2; color: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    .pace-badge.ahead  { background: #14532d; color: #4ade80; }
+    .pace-badge.behind { background: #450a0a; color: #f87171; }
+  }
+
   /* -- Boat tab ----------------------------------------- */
   .boat-section { margin-bottom: 1.75rem; }
   .boat-section-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
@@ -348,13 +364,16 @@ const HABITS = {
     { id: 'messages',   name: 'Messages' },
     { id: 'fruitveg',   name: 'Fruit & Veg' },
     { id: 'protein',    name: 'Protein' },
+    { id: 'reading',    name: 'Reading' },
+    { id: 'boatmaint',  name: 'Boat Maintenance' },
     { id: 'nobooze',    name: 'No Booze', type: 'count' }
   ],
   exercise: [
     { id: 'tennis',      name: 'Tennis',       type: 'duration' },
     { id: 'basketball',  name: 'Basketball',   type: 'duration' },
     { id: 'tabletennis', name: 'Table Tennis', type: 'duration' },
-    { id: 'hike',        name: 'Hike',         type: 'duration' }
+    { id: 'hike',        name: 'Hike',         type: 'duration' },
+    { id: 'golf',        name: 'Golf',         type: 'duration' }
   ]
 };
 
@@ -621,12 +640,22 @@ function renderDashboard() {
   }));
 
   // ── Year-to-date running ────────────────────────────────────────────────────
-  const RUN_GOAL = 500; // annual km target
+  const RUN_GOAL  = 500; // annual km target
   const yearRunKm = Object.entries(running).reduce((s, [date, e]) =>
     date.startsWith(`${YEAR}-`) ? s + (parseFloat(e.distance) || 0) : s, 0
   );
   const yearRunPct    = Math.min(100, Math.round(yearRunKm / RUN_GOAL * 100));
   const yearRunRemain = Math.max(0, RUN_GOAL - yearRunKm).toFixed(1);
+
+  // ── Pace calculation ────────────────────────────────────────────────────────
+  // Computes where you *should* be by today if progress were perfectly linear.
+  // Day 1 = Jan 1, Day 365 = Dec 31 (2026 is not a leap year).
+  const dayOfYear  = Math.max(1, Math.min(365, Math.floor((today - YEAR_START) / 86400000) + 1));
+  const paceKm     = (dayOfYear / 365) * RUN_GOAL;           // linear target for today
+  const pacePct    = Math.min(100, Math.round(paceKm / RUN_GOAL * 100));
+  const deltaKm    = yearRunKm - paceKm;                     // positive = ahead, negative = behind
+  const isAhead    = deltaKm >= 0;
+  const paceColor  = isAhead ? '#22c55e' : '#EF0107';        // green ahead, Arsenal red behind
 
   // ── Year-to-date exercise minutes by activity ───────────────────────────────
   // Single pass over all completion records for the year; accumulates minutes
@@ -762,14 +791,24 @@ function renderDashboard() {
       </div>
       <div class="dash-card" style="grid-column:1/-1">
         <div class="dash-card-title">Running Goal <span class="dash-sub">year to date</span></div>
-        <div style="display:flex;align-items:baseline;gap:20px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
           <div><span class="dash-big-num">${yearRunKm.toFixed(1)}</span><span class="dash-num-unit"> km</span></div>
-          <div><span class="dash-big-num" style="font-size:16px;color:#0369a1">${yearRunPct}%</span><span class="dash-num-unit"> of ${RUN_GOAL} km goal</span></div>
+          <div><span class="dash-big-num" style="font-size:16px;color:${paceColor}">${yearRunPct}%</span><span class="dash-num-unit"> of ${RUN_GOAL} km goal</span></div>
           <div style="flex:1"></div>
-          <span style="font-size:12px;color:var(--text-tertiary)">${yearRunRemain} km remaining</span>
+          <span class="pace-badge ${isAhead ? 'ahead' : 'behind'}">${isAhead ? '▲' : '▼'} ${Math.abs(deltaKm).toFixed(1)} km ${isAhead ? 'ahead' : 'behind'} pace</span>
         </div>
-        <div class="dash-bar-track" style="height:10px">
-          <div class="dash-bar-fill" style="width:${yearRunPct}%;background:#0369a1;border-radius:5px"></div>
+        <!-- Progress bar with pace marker. The grey vertical line shows where you should
+             be today on a linear path to 500 km. Fill turns green when ahead, red when behind. -->
+        <div class="pace-track">
+          <div class="pace-fill" style="width:${yearRunPct}%;background:${paceColor}"></div>
+          <div class="pace-marker" style="left:${pacePct}%">
+            <span class="pace-marker-label">▼ pace ${paceKm.toFixed(0)} km</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-tertiary)">
+          <span>0 km</span>
+          <span>${yearRunRemain} km remaining</span>
+          <span>${RUN_GOAL} km</span>
         </div>
       </div>
       <div class="dash-card" style="grid-column:1/-1">
