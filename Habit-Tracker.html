@@ -263,6 +263,30 @@
     .pace-badge.behind { background: #450a0a; color: #f87171; }
   }
 
+  /* -- Monthly Goals tab -------------------------------- */
+  .goals-month-nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .goals-month-btn { padding: 5px 14px; font-size: 13px; border-radius: var(--radius-md); border: 0.5px solid var(--border-strong); background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; transition: background 0.1s, color 0.1s; }
+  .goals-month-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .goals-month-btn:hover:not(.active) { background: var(--border); color: var(--text); }
+  .goals-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .goals-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-secondary); border-radius: var(--radius-md); border: 0.5px solid var(--border); transition: opacity 0.15s; }
+  .goals-row.done { opacity: 0.55; }
+  .goals-check { width: 20px; height: 20px; border-radius: 4px; border: 1.5px solid var(--border-strong); background: var(--bg); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--cell-yes-text); transition: background 0.1s; }
+  .goals-check.checked { background: var(--cell-yes-bg); border-color: var(--cell-yes-text); }
+  .goals-inp { flex: 1; font-size: 14px; border: none; background: transparent; color: var(--text); outline: none; font-family: inherit; min-width: 0; }
+  .goals-inp.done-text { text-decoration: line-through; color: var(--text-tertiary); }
+  .goals-del { background: none; border: none; cursor: pointer; color: var(--text-tertiary); font-size: 16px; padding: 2px 6px; border-radius: var(--radius-md); flex-shrink: 0; line-height: 1; }
+  .goals-del:hover { background: var(--cell-no-bg); color: var(--cell-no-text); }
+  .goals-add-btn { padding: 8px 18px; font-size: 13px; border-radius: var(--radius-md); border: 0.5px solid var(--border-strong); background: var(--bg-secondary); color: var(--text); cursor: pointer; }
+  .goals-add-btn:hover:not(:disabled) { background: var(--border); }
+  .goals-add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .goals-empty { font-size: 13px; color: var(--text-tertiary); padding: 28px 0; text-align: center; }
+  /* Dashboard mini goal list */
+  .dash-goal-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .dash-goal-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+  .dash-goal-text { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dash-goal-text.done { text-decoration: line-through; color: var(--text-tertiary); }
+
   /* -- Boat tab ----------------------------------------- */
   .boat-section { margin-bottom: 1.75rem; }
   .boat-section-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
@@ -311,6 +335,7 @@
     <button class="tab" onclick="switchTab('exercise')">Exercise</button>
     <button class="tab" onclick="switchTab('running')">Running</button>
     <button class="tab" onclick="switchTab('boat')">Boat</button>
+    <button class="tab" onclick="switchTab('goals')">Goals</button>
   </div>
 
   <div id="view-content"></div>
@@ -428,7 +453,7 @@ const YEAR_START     = new Date(YEAR, 0,  1);  // 1 Jan  — earliest window sta
 const YEAR_END       = new Date(YEAR, 11, 31); // 31 Dec
 const YEAR_MAX_START = new Date(YEAR, 11, 25); // 25 Dec — latest start (window ends 31 Dec)
 
-let appState       = { completions: {}, running: {}, boatMaintenance: {}, boatTodos: [] };
+let appState       = { completions: {}, running: {}, boatMaintenance: {}, boatTodos: [], monthlyGoals: {} };
 let activeTab      = 'dashy';
 let editingRunDate = null;
 let winStart   = defaultWindowStart();
@@ -488,6 +513,7 @@ function load() {
     if (!appState.running)          appState.running          = {};
     if (!appState.boatMaintenance)  appState.boatMaintenance  = {};
     if (!appState.boatTodos)        appState.boatTodos        = [];
+    if (!appState.monthlyGoals)     appState.monthlyGoals     = {};
   } catch(e) { /* corrupt storage — start fresh with default appState */ }
   render();
 }
@@ -541,7 +567,7 @@ function navigate(dir) {
 // Defines the left-to-right tab order used by both the swipe gesture handler
 // and the prev/next navigation arrows. To add a new tab, append its id here
 // AND add a matching <button class="tab"> in the HTML.
-const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running', 'boat'];
+const TAB_ORDER = ['dashy', 'daily', 'exercise', 'running', 'boat', 'goals'];
 
 // Switches the active tab and optionally plays a slide animation.
 // dir=1 slides in from the right (swiping left → moving forward in TAB_ORDER).
@@ -638,6 +664,19 @@ function renderDashboard() {
     }
     return streak;
   }));
+
+  // ── Current month goals (for dashboard card) ───────────────────────────────
+  // Uses today's actual month so the card always reflects the live month,
+  // independent of which month is selected in the Goals tab.
+  const curMonthKey   = `${YEAR}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const curMonthGoals = (appState.monthlyGoals || {})[curMonthKey] || [];
+  const curMonthName  = MONTHS[today.getMonth()];
+  const goalsDone     = curMonthGoals.filter(g => g.done).length;
+  const goalsTotal    = curMonthGoals.length;
+  // Show percentage relative to goals actually set (not MAX_GOALS) so an empty
+  // month shows 0% rather than misleadingly reporting full completion.
+  const goalsPct      = goalsTotal > 0 ? Math.round(goalsDone / goalsTotal * 100) : 0;
+  const goalsColor    = goalsPct === 100 ? '#22c55e' : '#0369a1';
 
   // ── Year-to-date running ────────────────────────────────────────────────────
   const RUN_GOAL  = 500; // annual km target
@@ -830,6 +869,25 @@ function renderDashboard() {
         <div class="dash-card-title">Exercise Hours <span class="dash-sub">year to date &middot; ${yearExTotalHrs} hrs total</span></div>
         ${yearExRows || '<span class="dash-empty">No data yet</span>'}
       </div>
+      <div class="dash-card" style="grid-column:1/-1">
+        <div class="dash-card-title">Monthly Goals <span class="dash-sub">${curMonthName} ${YEAR}</span></div>
+        ${goalsTotal > 0 ? `
+        <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px">
+          <span class="dash-big-num" style="color:${goalsColor}">${goalsDone}</span>
+          <span class="dash-num-unit">/ ${goalsTotal} goals complete</span>
+          <div style="flex:1"></div>
+          <span style="font-size:14px;font-weight:600;color:${goalsColor}">${goalsPct}%</span>
+        </div>
+        <div class="dash-bar-track" style="height:8px;margin-bottom:14px">
+          <div class="dash-bar-fill" style="width:${goalsPct}%;background:${goalsColor};border-radius:4px"></div>
+        </div>
+        ${curMonthGoals.map(g => `
+        <div class="dash-goal-row">
+          <span class="dash-goal-icon" style="color:${g.done ? 'var(--cell-yes-text)' : 'var(--text-tertiary)'}">${g.done ? '&#x2713;' : '&#x25CB;'}</span>
+          <span class="dash-goal-text${g.done ? ' done' : ''}">${esc(g.text || '(no title)')}</span>
+        </div>`).join('')}
+        ` : `<span class="dash-empty">No goals set for ${curMonthName} — add some in the Goals tab</span>`}
+      </div>
       <div class="dash-card">
         <div class="dash-card-title">Running <span class="dash-sub">last 7 days</span></div>
         <div class="dash-run-stats">
@@ -939,6 +997,106 @@ function toggleRunType(dateKey) {
     delete appState.running[dateKey].type;
     if (!Object.keys(appState.running[dateKey]).length) delete appState.running[dateKey];
   }
+  save(); render();
+}
+
+// ─── Monthly Goals Tab ────────────────────────────────────────────────────────
+
+// Goals are available from April (index 3) to December (index 11) of YEAR.
+// Each month key is 'YYYY-MM'; stored in appState.monthlyGoals[key] as an
+// array of { text: string, done: boolean } objects, capped at MAX_GOALS per month.
+const MAX_GOALS   = 5;
+const GOAL_MONTHS = Array.from({ length: 9 }, (_, i) => {
+  const mIdx = i + 3; // 3 = April … 11 = December
+  return { key: `${YEAR}-${String(mIdx + 1).padStart(2, '0')}`, label: MONTHS[mIdx] };
+});
+
+// Session variable: which month is currently visible in the Goals tab.
+// Initialised to the current month (clamped to Apr–Dec), or April if earlier.
+let activeGoalsMonth = (() => {
+  const now  = new Date();
+  const mIdx = now.getFullYear() === YEAR ? Math.max(3, Math.min(11, now.getMonth())) : 3;
+  return `${YEAR}-${String(mIdx + 1).padStart(2, '0')}`;
+})();
+
+// Renders the Goals tab: a month-selector pill nav followed by up to MAX_GOALS
+// editable goal rows. Each row has a checkbox, a text input, and a delete button.
+function renderGoals() {
+  const monthGoals = (appState.monthlyGoals || {})[activeGoalsMonth] || [];
+  const monthLabel = GOAL_MONTHS.find(m => m.key === activeGoalsMonth)?.label || '';
+  const doneCount  = monthGoals.filter(g => g.done).length;
+  const canAdd     = monthGoals.length < MAX_GOALS;
+
+  const monthNav = GOAL_MONTHS.map(({ key, label }) =>
+    `<button class="goals-month-btn${key === activeGoalsMonth ? ' active' : ''}"
+             onclick="switchGoalsMonth('${key}')">${label}</button>`
+  ).join('');
+
+  const goalRows = monthGoals.map((g, i) => `
+    <div class="goals-row${g.done ? ' done' : ''}">
+      <div class="goals-check${g.done ? ' checked' : ''}"
+           onclick="toggleGoalDone('${activeGoalsMonth}',${i})">${g.done ? '&#x2713;' : ''}</div>
+      <input class="goals-inp${g.done ? ' done-text' : ''}"
+             value="${esc(g.text)}"
+             placeholder="Enter goal..."
+             onchange="setGoalText('${activeGoalsMonth}',${i},this.value)" />
+      <button class="goals-del" onclick="deleteGoal('${activeGoalsMonth}',${i})" title="Remove">&#x2717;</button>
+    </div>`
+  ).join('');
+
+  return `
+    <div style="margin-bottom:1.25rem">
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Monthly Goals</div>
+      <div style="font-size:13px;color:var(--text-secondary)">Up to ${MAX_GOALS} goals per month &middot; ${YEAR}</div>
+    </div>
+    <div class="goals-month-nav">${monthNav}</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px">
+      <span style="font-size:15px;font-weight:600;color:var(--text)">${monthLabel}</span>
+      <span style="font-size:13px;color:var(--text-secondary)">${doneCount} / ${monthGoals.length} complete</span>
+    </div>
+    <div class="goals-list">
+      ${goalRows || `<div class="goals-empty">No goals yet for ${monthLabel} — add one below</div>`}
+    </div>
+    <button class="goals-add-btn" onclick="addGoal('${activeGoalsMonth}')" ${canAdd ? '' : 'disabled'}>
+      ${canAdd ? '+ Add Goal' : 'Maximum 5 goals reached'}
+    </button>`;
+}
+
+// Switches the visible month in the Goals tab without affecting appState.
+function switchGoalsMonth(key) {
+  activeGoalsMonth = key;
+  render();
+}
+
+// Appends a blank goal to the given month. Guards against exceeding MAX_GOALS.
+function addGoal(monthKey) {
+  if (!appState.monthlyGoals)             appState.monthlyGoals          = {};
+  if (!appState.monthlyGoals[monthKey])   appState.monthlyGoals[monthKey] = [];
+  if (appState.monthlyGoals[monthKey].length >= MAX_GOALS) return;
+  appState.monthlyGoals[monthKey].push({ text: '', done: false });
+  save(); render();
+}
+
+// Updates the text of a goal. Called on input blur (onchange) so save() fires
+// once per edit rather than on every keystroke.
+function setGoalText(monthKey, i, value) {
+  if (!appState.monthlyGoals?.[monthKey]?.[i]) return;
+  appState.monthlyGoals[monthKey][i].text = value;
+  save();
+}
+
+// Toggles the done state of a goal and re-renders so the strikethrough and
+// checkbox update immediately.
+function toggleGoalDone(monthKey, i) {
+  if (!appState.monthlyGoals?.[monthKey]?.[i]) return;
+  appState.monthlyGoals[monthKey][i].done = !appState.monthlyGoals[monthKey][i].done;
+  save(); render();
+}
+
+// Removes a goal by index and re-renders.
+function deleteGoal(monthKey, i) {
+  if (!appState.monthlyGoals?.[monthKey]) return;
+  appState.monthlyGoals[monthKey].splice(i, 1);
   save(); render();
 }
 
@@ -1124,6 +1282,11 @@ function render() {
 
   if (activeTab === 'boat') {
     document.getElementById('view-content').innerHTML = renderBoat();
+    return;
+  }
+
+  if (activeTab === 'goals') {
+    document.getElementById('view-content').innerHTML = renderGoals();
     return;
   }
 
@@ -1503,6 +1666,7 @@ async function loadFromDrive(retry = true, quiet = false) {
       if (!appState.running)         appState.running         = {};
       if (!appState.boatMaintenance) appState.boatMaintenance = {};
       if (!appState.boatTodos)       appState.boatTodos       = [];
+      if (!appState.monthlyGoals)    appState.monthlyGoals    = {};
       save(); render();
       if (!quiet) showToast('Loaded from Google Drive ✓');
     } catch(e) {
