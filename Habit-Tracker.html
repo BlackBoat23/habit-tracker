@@ -794,6 +794,9 @@ function renderDashboard() {
   const maxDist  = Math.max(...runEntries.map(r => r.dist), 0.1); // floor at 0.1 avoids /0
   const outPct   = totalKm > 0 ? Math.round(outKm   / totalKm * 100) : 0;
   const treadPct = totalKm > 0 ? 100 - outPct : 0;
+  // Derived metrics: count days with a logged distance, then compute average.
+  const runCount = runEntries.filter(r => r.dist > 0).length;
+  const avgRunKm = runCount > 0 ? totalKm / runCount : 0;
 
   // Bar height scaled proportionally to the tallest bar (max 62px).
   const runBars = runEntries.map(r => {
@@ -895,6 +898,8 @@ function renderDashboard() {
         <div class="dash-card-title">Running <span class="dash-sub">last 7 days</span></div>
         <div class="dash-run-stats">
           <div class="dash-run-stat-item"><span class="dash-big-num">${totalKm.toFixed(1)}</span><span class="dash-num-unit">km total</span></div>
+          <div class="dash-run-stat-item"><span class="dash-big-num">${runCount}</span><span class="dash-num-unit">runs</span></div>
+          <div class="dash-run-stat-item"><span class="dash-big-num">${avgRunKm.toFixed(1)}</span><span class="dash-num-unit">km avg</span></div>
           <div class="dash-run-stat-item"><span class="dash-big-num" style="color:#0369a1">${outKm.toFixed(1)}</span><span class="dash-num-unit">outside</span></div>
           <div class="dash-run-stat-item"><span class="dash-big-num" style="color:#7c3aed">${treadKm.toFixed(1)}</span><span class="dash-num-unit">treadmill</span></div>
         </div>
